@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Runtime artifacts
+app.log
+*.log
+
+# Local dead files (kept out of the repo, not deleted)
+_archive/
+
+# OS
+.DS_Store
+Thumbs.db

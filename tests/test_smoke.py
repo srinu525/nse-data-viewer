@@ -133,6 +133,7 @@ class NseAppTest(unittest.TestCase):
                 {"symbol": "RELIANCE", "name": "Reliance Industries", "series": "EQ"},
                 {"symbol": "TCS", "name": "Tata Consultancy Services", "series": "EQ"},
                 {"symbol": "INFY", "name": "Infosys Limited", "series": "EQ"},
+                {"symbol": "WIPRO", "name": "Wipro Limited", "series": "EQ"},
                 {"symbol": "RELBANK", "name": "Reliance Bank", "series": "EQ"},
             ],
         )
@@ -225,6 +226,43 @@ class NseAppTest(unittest.TestCase):
 
     def test_search_empty_query(self):
         self.assertEqual(self.client.get("/search_stocks").get_json(), [])
+
+    def test_get_peers_ok(self):
+        peers_patch = patch.object(viewer, "load_peers", return_value={"TCS": ["INFY", "WIPRO"]})
+        with peers_patch:
+            response = self.client.get("/get_peers?symbol=TCS")
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data["symbol"], "TCS")
+        self.assertEqual(len(data["peers"]), 2)
+        self.assertEqual(data["peers"][0]["symbol"], "INFY")
+        self.assertEqual(data["peers"][0]["lastPrice"], 105)
+        self.assertEqual(data["sector"]["industry"], "IT")
+        self.assertIsNone(data["message"])
+        self.assertIn("max-age=", response.headers.get("Cache-Control", ""))
+
+    def test_get_peers_skips_unknown_symbols(self):
+        peers_patch = patch.object(viewer, "load_peers", return_value={"TCS": ["INFY", "NOTAREAL"]})
+        with peers_patch:
+            response = self.client.get("/get_peers?symbol=TCS")
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual([p["symbol"] for p in data["peers"]], ["INFY"])
+
+    def test_get_peers_none_configured(self):
+        peers_patch = patch.object(viewer, "load_peers", return_value={})
+        with peers_patch:
+            response = self.client.get("/get_peers?symbol=TCS")
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data["peers"], [])
+        self.assertIsNotNone(data["message"])
+        self.assertIn("peers.csv", data["message"])
+
+    def test_get_peers_invalid(self):
+        response = self.client.get("/get_peers?symbol=BAD!SYM")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("error", response.get_json())
 
 
 if __name__ == "__main__":

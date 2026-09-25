@@ -19,25 +19,20 @@
 
 <body>
     <nav class="navbar navbar-dark app-navbar sticky-top py-2">
-        <div class="container">
+        <div class="app-container">
             <a class="navbar-brand" href="/">
                 <i class="bi bi-graph-up-arrow"></i>
                 NSE Data Viewer
                 <span class="live-badge">LIVE</span>
             </a>
-            <span class="navbar-text text-white-50 d-none d-md-inline">
-                <i class="bi bi-lightning-charge-fill"></i> NSE Quotations &amp; Intraday Charts
-            </span>
         </div>
     </nav>
 
-    <div class="container py-4">
+    <div class="container-fluid app-container py-2">
         <!-- Market Indices -->
-        <div class="card section-card mb-4">
-            <div class="card-header py-3">
-                <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
-                    <h4 class="mb-0 fs-5"><i class="bi bi-bar-chart-fill me-1 text-primary"></i>Market Indices
-                        <span class="live-badge ms-1">LIVE</span></h4>
+        <div class="card section-card mb-2">
+            <div class="card-header py-2">
+                <div class="d-flex justify-content-end align-items-center gap-2">
                     <small class="last-updated" id="indicesLastUpdated"></small>
                 </div>
             </div>
@@ -78,8 +73,8 @@
         </div>
 
         {% if symbol %}
-        <div class="card section-card mt-4">
-            <div class="card-header pt-3 pb-0">
+        <div class="card section-card mt-2">
+            <div class="card-header pt-2 pb-0">
                 <ul class="nav nav-tabs border-0" id="dataTabs" role="tablist">
                     <li class="nav-item" role="presentation">
                         <button class="nav-link {% if (active_tab or 'charts') == 'charts' %}active{% endif %}"
@@ -97,6 +92,14 @@
                             <i class="bi bi-table me-1"></i>Historical Data
                         </button>
                     </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link {% if active_tab == 'peers' %}active{% endif %}"
+                            id="peers-tab" data-bs-toggle="tab" data-bs-target="#peers" type="button"
+                            role="tab" aria-controls="peers"
+                            aria-selected="{% if active_tab == 'peers' %}true{% else %}false{% endif %}">
+                            <i class="bi bi-people me-1"></i>Peers &amp; Sector
+                        </button>
+                    </li>
                 </ul>
             </div>
             <div class="card-body">
@@ -104,7 +107,7 @@
                     <!-- Historical Data Tab -->
                     <div class="tab-pane fade {% if active_tab == 'historical' %}show active{% endif %}"
                         id="historical" role="tabpanel" aria-labelledby="historical-tab">
-                        <form method="POST" class="mb-3" id="historicalForm">
+                        <form method="POST" class="mb-2" id="historicalForm">
                             <input type="hidden" name="symbol" value="{{ symbol }}">
                             <input type="hidden" name="active_tab" value="historical">
                             <div class="row g-3">
@@ -167,12 +170,77 @@
                         </div>
                     </div>
 
+                    <!-- Peers & Sector Tab -->
+                    <div class="tab-pane fade {% if active_tab == 'peers' %}show active{% endif %}"
+                        id="peers" role="tabpanel" aria-labelledby="peers-tab">
+                        <div class="card border-0 shadow-none mb-3">
+                            <div class="card-body bg-white rounded-4 shadow-sm">
+                                <h5 class="fw-semibold mb-2"><i class="bi bi-diagram-3 me-1 text-primary"></i>Sector
+                                    Data</h5>
+                                <div class="row g-2">
+                                    <div class="col-6 col-md-4 col-lg-3">
+                                        <div class="stat-tile p-2">
+                                            <small class="text-muted">Industry</small>
+                                            <h5 id="peerIndustry" class="mb-0">-</h5>
+                                        </div>
+                                    </div>
+                                    <div class="col-6 col-md-4 col-lg-3">
+                                        <div class="stat-tile p-2">
+                                            <small class="text-muted">Sector Index</small>
+                                            <h5 id="peerSectorIndex" class="mb-0">-</h5>
+                                        </div>
+                                    </div>
+                                    <div class="col-6 col-md-4 col-lg-3">
+                                        <div class="stat-tile p-2">
+                                            <small class="text-muted">Sector PE</small>
+                                            <h5 id="peerSectorPe" class="mb-0">-</h5>
+                                        </div>
+                                    </div>
+                                    <div class="col-6 col-md-4 col-lg-3">
+                                        <div class="stat-tile p-2">
+                                            <small class="text-muted">Peers Found</small>
+                                            <h5 id="peerCount" class="mb-0">-</h5>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="alert alert-info py-2 d-none" id="peersStatus">
+                            <i class="bi bi-hourglass-split me-1"></i><span id="peersStatusText">Loading peer
+                                data...</span>
+                        </div>
+
+                        <div class="table-responsive data-table border rounded-3 d-none" id="peersTable">
+                            <table class="table table-hover table-bordered table-sm align-middle mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Symbol</th>
+                                        <th>Company</th>
+                                        <th class="text-end">Last Price</th>
+                                        <th class="text-end">Change</th>
+                                        <th class="text-end">% Change</th>
+                                        <th class="text-end">PE</th>
+                                        <th>Industry</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="peersBody"></tbody>
+                            </table>
+                        </div>
+                        <div class="alert alert-warning py-2" id="peersEmpty">
+                            <i class="bi bi-info-circle me-1"></i><span id="peersEmptyText">No peer data
+                                available.</span>
+                        </div>
+                    </div>
+
                     <!-- Price Charts Tab -->
                     <div class="tab-pane fade {% if (active_tab or 'charts') == 'charts' %}show active{% endif %}"
                         id="charts" role="tabpanel" aria-labelledby="charts-tab">
                         <!-- Stock Overview -->
-                        <div class="card border-0 shadow-none mb-4">
-                            <div class="card-body bg-white rounded-4 shadow-sm" id="mainPriceTile">
+                        <div class="row g-2 mb-3">
+                            <div class="col-lg-6">
+                                <div class="card border-0 shadow-none h-100">
+                                    <div class="card-body bg-white rounded-4 shadow-sm h-100" id="mainPriceTile">
                                 <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
                                     <div>
                                         <span class="badge text-bg-light border mb-1">{{ symbol }}</span>
@@ -192,146 +260,153 @@
                                 <div class="d-flex justify-content-end">
                                     <small class="last-updated" id="stockLastUpdated"></small>
                                 </div>
+                                </div>
                             </div>
-                        </div>
+                            </div>
 
-                        <!-- Snapshot Tiles -->
-                        <div class="row g-2 mb-4">
-                            <div class="col-6 col-md-4 col-lg-2">
+                            <div class="col-lg-6">
+                                <!-- Snapshot Tiles -->
+                                <div class="row g-2 row-cols-2 row-cols-md-3 h-100">
+                            <div class="col">
                                 <div class="stat-tile p-2">
                                     <small class="text-muted">Open</small>
                                     <h5 id="openPrice" class="mb-0">-</h5>
                                 </div>
                             </div>
-                            <div class="col-6 col-md-4 col-lg-2">
+                            <div class="col">
                                 <div class="stat-tile p-2">
                                     <small class="text-muted">Prev Close</small>
                                     <h5 id="prevClose" class="mb-0">-</h5>
                                 </div>
                             </div>
-                            <div class="col-6 col-md-4 col-lg-2">
+                            <div class="col">
                                 <div class="stat-tile p-2">
                                     <small class="text-muted">Today's High</small>
                                     <h5 id="dayHigh" class="mb-0">-</h5>
                                 </div>
                             </div>
-                            <div class="col-6 col-md-4 col-lg-2">
+                            <div class="col">
                                 <div class="stat-tile p-2">
                                     <small class="text-muted">Today's Low</small>
                                     <h5 id="dayLow" class="mb-0">-</h5>
                                 </div>
                             </div>
-                            <div class="col-6 col-md-4 col-lg-2">
+                            <div class="col">
                                 <div class="stat-tile p-2">
                                     <small class="text-muted">52W High</small>
                                     <h5 id="weekHigh" class="mb-0">-</h5>
                                 </div>
                             </div>
-                            <div class="col-6 col-md-4 col-lg-2">
+                            <div class="col">
                                 <div class="stat-tile p-2">
                                     <small class="text-muted">52W Low</small>
                                     <h5 id="weekLow" class="mb-0">-</h5>
                                 </div>
                             </div>
-                            <div class="col-6 col-md-4 col-lg-2">
+                            </div>
+                            </div>
+                        </div>
+
+                        <div class="row g-2 row-cols-2 row-cols-md-3 row-cols-lg-6 mb-3">
+                            <div class="col">
                                 <div class="stat-tile p-2">
                                     <small class="text-muted">Upper Limit</small>
                                     <h5 id="upperLimit" class="mb-0">-</h5>
                                 </div>
                             </div>
-                            <div class="col-6 col-md-4 col-lg-2">
+                            <div class="col">
                                 <div class="stat-tile p-2">
                                     <small class="text-muted">Lower Limit</small>
                                     <h5 id="lowerLimit" class="mb-0">-</h5>
                                 </div>
                             </div>
-                            <div class="col-6 col-md-4 col-lg-2">
+                            <div class="col">
                                 <div class="stat-tile p-2">
                                     <small class="text-muted">VWAP</small>
                                     <h5 id="vwap" class="mb-0">-</h5>
                                 </div>
                             </div>
-                            <div class="col-6 col-md-4 col-lg-2">
+                            <div class="col">
                                 <div class="stat-tile p-2">
                                     <small class="text-muted">PE Ratio</small>
                                     <h5 id="peRatio" class="mb-0">-</h5>
                                 </div>
                             </div>
-                            <div class="col-6 col-md-4 col-lg-2">
+                            <div class="col">
                                 <div class="stat-tile p-2">
                                     <small class="text-muted">Sector Index</small>
                                     <h5 id="sectorIndex" class="mb-0">-</h5>
                                 </div>
                             </div>
-                            <div class="col-6 col-md-4 col-lg-2">
+                            <div class="col">
                                 <div class="stat-tile p-2">
                                     <small class="text-muted">Industry</small>
                                     <h5 id="industry" class="mb-0">-</h5>
+                                        </div>
+                                    </div>
                                 </div>
-                            </div>
-                        </div>
 
                         <!-- Trading Metrics -->
-                        <div class="card border-0 shadow-none mb-4">
+                        <div class="card border-0 shadow-none mb-3">
                             <div class="card-body bg-white rounded-4 shadow-sm">
-                                <h5 class="fw-semibold mb-3"><i class="bi bi-speedometer2 me-1 text-primary"></i>Trading
+                                <h5 class="fw-semibold mb-2"><i class="bi bi-speedometer2 me-1 text-primary"></i>Trading
                                     Metrics</h5>
-                                <div class="row g-2">
-                                    <div class="col-6 col-md-4">
+                                <div class="row g-2 row-cols-2 row-cols-md-3 row-cols-lg-5">
+                                    <div class="col">
                                         <div class="stat-tile p-2">
                                             <small class="text-muted">Total Traded Volume</small>
                                             <h5 id="totalTradedVolume" class="mb-0">-</h5>
                                         </div>
                                     </div>
-                                    <div class="col-6 col-md-4">
+                                    <div class="col">
                                         <div class="stat-tile p-2">
                                             <small class="text-muted">Traded Value (₹ Cr)</small>
                                             <h5 id="totalTradedValue" class="mb-0">-</h5>
                                         </div>
                                     </div>
-                                    <div class="col-6 col-md-4">
+                                    <div class="col">
                                         <div class="stat-tile p-2">
                                             <small class="text-muted">Delivery %</small>
                                             <h5 id="deliveryPercentage" class="mb-0">-</h5>
                                         </div>
                                     </div>
-                                    <div class="col-6 col-md-4">
+                                    <div class="col">
                                         <div class="stat-tile p-2">
                                             <small class="text-muted">Daily Volatility</small>
                                             <h5 id="dailyVolatility" class="mb-0">-</h5>
                                         </div>
                                     </div>
-                                    <div class="col-6 col-md-4">
+                                    <div class="col">
                                         <div class="stat-tile p-2">
                                             <small class="text-muted">Annual Volatility</small>
                                             <h5 id="annualVolatility" class="mb-0">-</h5>
                                         </div>
                                     </div>
-                                    <div class="col-6 col-md-4">
+                                    <div class="col">
                                         <div class="stat-tile p-2">
                                             <small class="text-muted">Security VAR</small>
                                             <h5 id="securityVar" class="mb-0">-</h5>
                                         </div>
                                     </div>
-                                    <div class="col-6 col-md-4">
+                                    <div class="col">
                                         <div class="stat-tile p-2">
                                             <small class="text-muted">VAR Margin</small>
                                             <h5 id="varMargin" class="mb-0">-</h5>
                                         </div>
                                     </div>
-                                    <div class="col-6 col-md-4">
+                                    <div class="col">
                                         <div class="stat-tile p-2">
                                             <small class="text-muted">Extreme Loss Margin</small>
                                             <h5 id="extremeLossMargin" class="mb-0">-</h5>
                                         </div>
                                     </div>
-                                    <div class="col-6 col-md-4">
+                                    <div class="col">
                                         <div class="stat-tile p-2">
                                             <small class="text-muted">Applicable Margin</small>
                                             <h5 id="applicableMargin" class="mb-0">-</h5>
                                         </div>
                                     </div>
-                                    <div class="col-6 col-md-4">
+                                    <div class="col">
                                         <div class="stat-tile p-2">
                                             <small class="text-muted">Market Lot</small>
                                             <h5 id="marketLot" class="mb-0">-</h5>
@@ -342,9 +417,9 @@
                         </div>
 
                         <!-- Pre-Open Market -->
-                        <div class="card border-0 shadow-none mb-4">
+                        <div class="card border-0 shadow-none mb-3">
                             <div class="card-body bg-white rounded-4 shadow-sm">
-                                <h5 class="fw-semibold mb-3"><i class="bi bi-sunrise me-1 text-primary"></i>Pre-Open
+                                <h5 class="fw-semibold mb-2"><i class="bi bi-sunrise me-1 text-primary"></i>Pre-Open
                                     Market Data</h5>
                                 <div class="row g-2">
                                     <div class="col-6 col-md-4 col-lg">
@@ -383,7 +458,7 @@
 
                         <!-- Dynamic Charts -->
                         <div class="chart-row">
-                            <div class="chart-col mb-4 d-none" id="preOpenChartContainer">
+                            <div class="chart-col mb-3 d-none" id="preOpenChartContainer">
                                 <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
                                     <h4 class="chart-title mb-0">Pre-Open Market Prices</h4>
                                     <small class="last-updated" id="preOpenLastUpdated"></small>
@@ -399,7 +474,7 @@
                                 </div>
                             </div>
 
-                            <div class="chart-col mb-4 d-none" id="normalMarketChartContainer">
+                            <div class="chart-col mb-3 d-none" id="normalMarketChartContainer">
                                 <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
                                     <h4 class="chart-title mb-0">Normal Market Prices</h4>
                                     <small class="last-updated" id="normalMarketLastUpdated"></small>
@@ -427,7 +502,7 @@
         </div>
         {% endif %}
 
-        <footer class="text-center text-muted small mt-4">
+        <footer class="text-center text-muted small mt-3">
             <i class="bi bi-info-circle me-1"></i>Data sourced from NSE India. Refresh or search again for latest
             quotes. Not investment advice.
         </footer>

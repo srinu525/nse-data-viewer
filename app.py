@@ -30,6 +30,7 @@ CACHE_TTL_HEADER = {
     "/get_live_data": config.TTL_LIVE_CHART,
     "/get_indices_data": config.TTL_INDICES,
     "/search_stocks": 3600,
+    "/get_peers": config.TTL_PEERS,
 }
 
 
@@ -564,6 +565,102 @@ def search_stocks():
     results.sort(key=lambda r: (r[0], len(r[1]), r[1]))
 
     return jsonify([r[3] for r in results[:10]])
+
+
+_peers_cache = None
+_peers_cache_time = 0
+
+
+def load_peers(force_reload=False):
+    """Load symbol -> peer symbol mapping from peers.csv (comma-separated)."""
+    global _peers_cache, _peers_cache_time
+    now = time.time()
+    if _peers_cache is not None and not force_reload and (now - _peers_cache_time) < config.STOCKS_CACHE_TTL:
+        return _peers_cache
+
+    peers_map = {}
+    try:
+        with open('peers.csv', mode='r', encoding='utf-8') as file:
+            reader = csv.DictReader(file)
+            for row in reader:
+                symbol = (row.get('symbol') or '').strip().upper()
+                raw = row.get('peers') or ''
+                peers = [p.strip().upper() for p in raw.split(',') if p.strip()]
+                if symbol and peers:
+                    peers_map[symbol] = peers
+    except FileNotFoundError:
+        logger.warning("peers.csv file not found - peers tab will show sector info only")
+    except Exception as e:
+        logger.error("Error loading peers.csv: %s", e)
+
+    _peers_cache = peers_map
+    _peers_cache_time = now
+    return peers_map
+
+
+@app.route('/get_peers')
+def get_peers():
+    symbol = request.args.get('symbol', '').strip().upper()
+
+    if not is_valid_symbol(symbol):
+        return jsonify({"error": "Invalid symbol."}), 400
+
+    peers_map = load_peers()
+    known = {s.get('symbol', '').upper() for s in load_stocks()}
+    peer_symbols = [
+        p for p in peers_map.get(symbol, [])
+        if p != symbol and p in known
+    ]
+
+    sector = {}
+    try:
+        quote_response = next_api_quote(symbol)
+        if quote_response:
+            legacy = map_next_quote_to_legacy(quote_response)
+            sector = {
+                "industry": legacy["info"].get("industry"),
+                "sectorIndex": legacy["metadata"].get("pdSectorInd"),
+                "sectorPe": legacy["metadata"].get("pdSectorPe"),
+            }
+    except Exception as e:
+        logger.warning("Error fetching sector data for peers: %s", e)
+
+    peers = []
+    if peer_symbols:
+        for peer in peer_symbols[:config.MAX_PEERS]:
+            try:
+                pq = next_api_quote(peer)
+                if not pq:
+                    continue
+                legacy = map_next_quote_to_legacy(pq)
+                peers.append({
+                    "symbol": legacy["info"].get("symbol") or peer,
+                    "name": legacy["info"].get("companyName"),
+                    "lastPrice": legacy["priceInfo"].get("lastPrice"),
+                    "change": legacy["priceInfo"].get("change"),
+                    "pChange": legacy["priceInfo"].get("pChange"),
+                    "pe": legacy["metadata"].get("pdSectorPe"),
+                    "industry": legacy["info"].get("industry"),
+                })
+            except Exception as e:
+                logger.warning("Error fetching peer data for %s: %s", peer, e)
+
+    if peers:
+        message = None
+    elif symbol not in peers_map:
+        message = (
+            "No peers are configured for %s. Add a row to peers.csv "
+            "(e.g. %s,\"PEER1,PEER2\") to enable peer comparison." % (symbol, symbol)
+        )
+    else:
+        message = "Peer data could not be loaded for %s. Please try again." % symbol
+
+    return jsonify({
+        "symbol": symbol,
+        "sector": sector,
+        "peers": peers,
+        "message": message,
+    })
 
 
 if __name__ == "__main__":

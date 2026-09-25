@@ -20,6 +20,10 @@ TTL_HISTORICAL = 300
 TTL_LIVE_CHART = 10
 TTL_INDICES = 15
 TTL_PRE_OPEN = 30
+TTL_PEERS = 300
+
+# Peers comparison: maximum number of peer quotes fetched per request
+MAX_PEERS = 12
 
 # Session init sequence
 INIT_HTML_URL = "https://www.nseindia.com"

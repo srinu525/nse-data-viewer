@@ -122,6 +122,93 @@
             });
     }
 
+    // ---------------- Peers & Sector tab ----------------
+    function showPeersStatus(text, isError) {
+        var status = document.getElementById('peersStatus');
+        var statusText = document.getElementById('peersStatusText');
+        var empty = document.getElementById('peersEmpty');
+        var table = document.getElementById('peersTable');
+        if (status) {
+            status.className = 'alert ' + (isError ? 'alert-danger' : 'alert-info') + ' py-2';
+            status.classList.remove('d-none');
+        }
+        if (statusText) statusText.textContent = text;
+        if (empty) empty.classList.add('d-none');
+        if (table) table.classList.add('d-none');
+    }
+
+    function loadPeers() {
+        showPeersStatus('Loading peer data...', false);
+
+        fetch('/get_peers?symbol=' + encodeURIComponent(currentSymbol))
+            .then(function (response) { return response.json(); })
+            .then(function (data) {
+                var status = document.getElementById('peersStatus');
+                var empty = document.getElementById('peersEmpty');
+                var emptyText = document.getElementById('peersEmptyText');
+                var table = document.getElementById('peersTable');
+                var tbody = document.getElementById('peersBody');
+
+                if (status) status.classList.add('d-none');
+
+                if (data.error) {
+                    showPeersStatus(data.error, true);
+                    return;
+                }
+
+                var dropEl = function (id, value) {
+                    var el = document.getElementById(id);
+                    if (el) el.textContent = value;
+                };
+
+                var sector = data.sector || {};
+                dropEl('peerIndustry', sector.industry || '-');
+                dropEl('peerSectorIndex', sector.sectorIndex || '-');
+                dropEl('peerSectorPe', sector.sectorPe || '-');
+                dropEl('peerCount', (data.peers || []).length);
+
+                if (!data.peers || data.peers.length === 0) {
+                    if (table) table.classList.add('d-none');
+                    if (emptyText) emptyText.textContent = data.message ||
+                        'No peer data available for ' + currentSymbol + '.';
+                    if (empty) empty.classList.remove('d-none');
+                    return;
+                }
+
+                var fmt = function (v, dec) {
+                    return (v !== null && v !== undefined && !isNaN(v))
+                        ? Number(v).toFixed(dec || 2) : '-';
+                };
+
+                var rows = data.peers.map(function (p) {
+                    var change = (p.change !== null && p.change !== undefined) ? p.change : 0;
+                    var pChange = (p.pChange !== null && p.pChange !== undefined) ? p.pChange : 0;
+                    var cls = change >= 0 ? 'green-text' : 'red-text';
+                    var sign = change >= 0 ? '+' : '-';
+
+                    return '<tr>' +
+                        '<td class="fw-semibold">' +
+                        '<a href="/?symbol=' + encodeURIComponent(p.symbol) +
+                        '" class="text-decoration-none">' + p.symbol + '</a></td>' +
+                        '<td>' + (p.name || '-') + '</td>' +
+                        '<td class="text-end">' + fmt(p.lastPrice) + '</td>' +
+                        '<td class="text-end ' + cls + '">' + (change ? sign + Math.abs(change).toFixed(2) : '-') + '</td>' +
+                        '<td class="text-end ' + cls + '">' + (pChange ? sign + Math.abs(pChange).toFixed(2) + '%' : '-') + '</td>' +
+                        '<td class="text-end">' + (p.pe || '-') + '</td>' +
+                        '<td>' + (p.industry || '-') + '</td>' +
+                        '</tr>';
+                }).join('');
+
+                tbody.innerHTML = rows;
+                if (empty) empty.classList.add('d-none');
+                if (table) table.classList.remove('d-none');
+            })
+            .catch(function (error) {
+                console.error('Error loading peers:', error);
+                showPeersStatus('Error loading peer data. Please try again.', true);
+            });
+    }
+
     // ---------------- Indices Slider ----------------
     var indicesUpdateInterval = null;
 
@@ -817,6 +904,8 @@
                 initializeCharts();
             } else if (activeTab === 'historical') {
                 setTimeout(loadHistorical, 100);
+            } else if (activeTab === 'peers') {
+                setTimeout(loadPeers, 100);
             }
 
             var historicalForm = document.getElementById('historicalForm');
@@ -834,6 +923,9 @@
                     }
                     if (this.id === 'historical-tab') {
                         setTimeout(loadHistorical, 100);
+                    }
+                    if (this.id === 'peers-tab') {
+                        setTimeout(loadPeers, 100);
                     }
                 });
             });
@@ -855,4 +947,9 @@
         if (indicesUpdateInterval) clearInterval(indicesUpdateInterval);
         if (stockUpdateInterval) clearInterval(stockUpdateInterval);
     });
+
+    // Expose handlers used by inline onclick attributes in the template
+    window.setPeriod = setPeriod;
+    window.resetZoom = resetZoom;
+    window.showAllData = showAllData;
 })();

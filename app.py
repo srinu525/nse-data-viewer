@@ -191,14 +191,34 @@ def next_api_quote(symbol):
 
 
 def next_api_historical(symbol, from_date, to_date):
-    """Fetch historical trade data via NSE NextApi (bypasses 503 on /api/historical)."""
+    """Fetch historical trade data via NSE NextApi (bypasses 503 on /api/historical).
+
+    NextApi's getHistoricalTradeData silently clips any window to the most recent
+    ~100 calendar days, so longer ranges are fetched one calendar month at a time
+    and merged in chronological order.
+    """
     from urllib.parse import urlencode
-    url = config.NEXT_API_URL + "?" + urlencode(dict(
-        functionName="getHistoricalTradeData", symbol=symbol.upper(),
-        series="EQ", fromDate=from_date, toDate=to_date
-    ))
-    data = nse_fetcher.fetch_nse_data(url, cache_ttl=config.TTL_HISTORICAL)
-    return data if isinstance(data, list) else None
+
+    fd = datetime.strptime(from_date, "%d-%m-%Y").date()
+    td = datetime.strptime(to_date, "%d-%m-%Y").date()
+
+    merged = {}
+    month_start = fd.replace(day=1)
+    while month_start <= td:
+        month_end = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+        window_to = min(month_end, td)
+        url = config.NEXT_API_URL + "?" + urlencode(dict(
+            functionName="getHistoricalTradeData", symbol=symbol.upper(),
+            series="EQ", fromDate=month_start.strftime("%d-%m-%Y"),
+            toDate=window_to.strftime("%d-%m-%Y"),
+        ))
+        data = nse_fetcher.fetch_nse_data(url, cache_ttl=config.TTL_HISTORICAL)
+        if isinstance(data, list):
+            for entry in data:
+                merged[entry.get("mtimestamp")] = entry
+        month_start = month_end + timedelta(days=1)
+
+    return sorted(merged.values(), key=lambda e: datetime.strptime(e["mtimestamp"], "%d-%b-%Y"), reverse=True) or None
 
 
 def map_next_quote_to_legacy(q):

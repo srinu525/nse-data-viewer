@@ -201,6 +201,23 @@ class NseAppTest(unittest.TestCase):
         self.assertEqual(len(data["normal_market"]["prices"]), 2)
         self.assertEqual(data["close_price"], 105.0)
 
+    def test_get_live_data_exposes_epoch_timestamps(self):
+        """Charts need epoch seconds to plot a true time-proportional axis."""
+        data = self.client.get("/get_live_data?symbol=TCS").get_json()
+        for phase in ("pre_open", "normal_market"):
+            series = data[phase]
+            self.assertEqual(len(series["timestamps"]), len(series["prices"]))
+            self.assertEqual(series["timestamps"], sorted(series["timestamps"]))
+            self.assertEqual(len(series["times"]), len(series["prices"]))
+        self.assertEqual(data["pre_open"]["timestamps"][0], 1700000000.0)
+        self.assertEqual(data["normal_market"]["timestamps"][0], 1700000120.0)
+
+    def test_convert_timestamp_matches_nse_ist_wall_clock(self):
+        """NSE epoch ms render as IST wall clock in UTC - no +05:30 offset."""
+        market_open_ms = 1791191700000  # 2026-10-05 09:15:00 UTC as NSE sends it
+        self.assertEqual(viewer.convert_timestamp(market_open_ms), ("09:15:00", "2026-10-05"))
+        self.assertEqual(viewer.convert_timestamp(1700000000000), ("22:13:20", "2023-11-14"))
+
     def test_get_live_data_invalid(self):
         response = self.client.get("/get_live_data?symbol=abc def")
         self.assertEqual(response.status_code, 400)

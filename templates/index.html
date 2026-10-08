@@ -20,11 +20,18 @@
 <body>
     <nav class="navbar navbar-dark app-navbar sticky-top py-2">
         <div class="app-container">
-            <a class="navbar-brand" href="/">
-                <i class="bi bi-graph-up-arrow"></i>
-                NSE Data Viewer
-                <span class="live-badge">LIVE</span>
-            </a>
+            <div class="d-flex align-items-center gap-3">
+                <a class="navbar-brand" href="/">
+                    <i class="bi bi-graph-up-arrow"></i>
+                    NSE Data Viewer
+                    <span class="live-badge">LIVE</span>
+                </a>
+                <ul class="nav nav-pills">
+                    <li class="nav-item">
+                        <a class="nav-link text-white" href="/brokerage-calculator"><i class="bi bi-calculator"></i> Brokerage Calculator</a>
+                    </li>
+                </ul>
+            </div>
         </div>
     </nav>
 
@@ -99,6 +106,11 @@
                             aria-selected="{% if active_tab == 'peers' %}true{% else %}false{% endif %}">
                             <i class="bi bi-people me-1"></i>Peers &amp; Sector
                         </button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <a class="nav-link" href="/brokerage-calculator">
+                            <i class="bi bi-calculator me-1"></i>Brokerage Calculator
+                        </a>
                     </li>
                 </ul>
             </div>
@@ -514,7 +526,11 @@
     <script>
         window.NSE_CONFIG = {
             symbol: {{ symbol | tojson }} || null,
-            activeTab: {{ active_tab | default('charts') | tojson }}
+            activeTab: {{ active_tab | default('charts') | tojson }},
+            preOpenOpenMinute: {{ pre_open_open_minute | default(540) }},
+            preOpenCloseMinute: {{ pre_open_close_minute | default(555) }},
+            marketOpenMinute: {{ market_open_minute | default(555) }},
+            marketCloseMinute: {{ market_close_minute | default(930) }}
         };
     </script>
     <script src="{{ url_for('static', filename='app.js') }}"></script>

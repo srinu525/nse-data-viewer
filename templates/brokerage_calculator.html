@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Brokerage Calculator - NSE Data Viewer</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.1/font/bootstrap-icons.css">
+    <link href="{{ url_for('static', filename='site.css') }}?v=2" rel="stylesheet">
+    <style>
+        .broker-btn { cursor: pointer; border: 2px solid #dee2e6; border-radius: 10px; padding: 10px 14px; text-align: center; transition: all .15s; background: #fff; }
+        .broker-btn:hover { border-color: #0d6efd; }
+        .broker-btn.active { border-color: #0d6efd; background: #e8f0fe; }
+        .broker-btn .broker-name { font-size: .8rem; font-weight: 600; margin-top: 4px; }
+        .segment-btn { cursor: pointer; border: 2px solid #dee2e6; border-radius: 8px; padding: 8px 16px; font-size: .85rem; font-weight: 500; transition: all .15s; background: #fff; }
+        .segment-btn:hover { border-color: #0d6efd; }
+        .segment-btn.active { border-color: #0d6efd; background: #e8f0fe; color: #0d6efd; }
+        .charge-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #f0f0f0; font-size: .9rem; }
+        .charge-row:last-child { border-bottom: none; }
+        .pnl-box { border-radius: 12px; padding: 18px; text-align: center; }
+        .pnl-profit { background: #e6f9f0; }
+        .pnl-loss { background: #fdecea; }
+        .result-card { border-radius: 12px; border: 1px solid #e0e0e0; padding: 16px; background: #fafafa; }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-dark app-navbar sticky-top py-2">
+        <div class="app-container">
+            <a class="navbar-brand" href="/">
+                <i class="bi bi-graph-up-arrow"></i> NSE Data Viewer
+                <span class="live-badge">LIVE</span>
+            </a>
+            <ul class="nav nav-pills">
+                <li class="nav-item"><a class="nav-link text-white" href="/"><i class="bi bi-house-door"></i> Home</a></li>
+                <li class="nav-item"><a class="nav-link active" href="/brokerage-calculator"><i class="bi bi-calculator"></i> Brokerage</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <div class="container-fluid app-container py-3">
+        <div class="card section-card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-calculator me-2"></i>Brokerage Calculator (India)</h5>
+            </div>
+            <div class="card-body">
+
+                <!-- Broker Selection -->
+                <div class="mb-3">
+                    <label class="form-label fw-semibold small text-muted">SELECT BROKER</label>
+                    <div class="d-flex flex-wrap gap-2" id="brokerBtns">
+                        <div class="broker-btn active" data-broker="zerodha"><i class="bi bi-lightning-charge-fill text-primary"></i><div class="broker-name">Zerodha</div></div>
+                        <div class="broker-btn" data-broker="groww"><i class="bi bi-flower1 text-success"></i><div class="broker-name">Groww</div></div>
+                        <div class="broker-btn" data-broker="angel"><i class="bi bi-star-fill text-warning"></i><div class="broker-name">Angel One</div></div>
+                        <div class="broker-btn" data-broker="dhan"><i class="bi bi-shield-fill text-info"></i><div class="broker-name">Dhan</div></div>
+                        <div class="broker-btn" data-broker="upstox"><i class="bi bi-graph-up text-danger"></i><div class="broker-name">Upstox</div></div>
+                    </div>
+                </div>
+
+                <!-- Segment Selection -->
+                <div class="mb-3">
+                    <label class="form-label fw-semibold small text-muted">SELECT SEGMENT</label>
+                    <div class="d-flex flex-wrap gap-2" id="segmentBtns">
+                        <div class="segment-btn active" data-segment="equity_intraday">Equity Intraday</div>
+                        <div class="segment-btn" data-segment="equity_delivery">Equity Delivery</div>
+                        <div class="segment-btn" data-segment="fo_futures">F&O Futures</div>
+                        <div class="segment-btn" data-segment="fo_options">F&O Options</div>
+                    </div>
+                </div>
+
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <label class="form-label">Buy Price (₹)</label>
+                        <input type="number" step="0.01" min="0" class="form-control" id="buyPrice" placeholder="e.g. 2500">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Sell Price (₹)</label>
+                        <input type="number" step="0.01" min="0" class="form-control" id="sellPrice" placeholder="e.g. 2550">
+                    </div>
+                    <div class="col-md-4" id="quantityGroup">
+                        <label class="form-label">Quantity (shares)</label>
+                        <input type="number" step="1" min="1" class="form-control" id="quantity" placeholder="e.g. 100">
+                    </div>
+                    <div class="col-md-4 d-none" id="lotsGroup">
+                        <label class="form-label">Lots</label>
+                        <input type="number" step="1" min="1" class="form-control" id="lots" value="1">
+                    </div>
+                    <div class="col-md-4 d-none" id="lotSizeGroup">
+                        <label class="form-label">Lot Size</label>
+                        <input type="number" step="1" min="1" class="form-control" id="lotSize" placeholder="e.g. 50">
+                    </div>
+                    <div class="col-md-4 d-none" id="premiumGroup">
+                        <label class="form-label">Premium / Buy Price (₹)</label>
+                        <input type="number" step="0.01" min="0" class="form-control" id="premium" placeholder="e.g. 150">
+                    </div>
+                </div>
+
+                <!-- Results (live) -->
+                <div id="resultsSection" class="mt-4 d-none">
+                    <hr>
+                    <div class="row g-3">
+                        <div class="col-lg-5">
+                            <div id="pnlBox" class="pnl-box pnl-profit mb-3">
+                                <div class="text-muted small mb-1">Net P&amp;L</div>
+                                <h2 id="netPnl" class="mb-0 fw-bold">₹ 0.00</h2>
+                                <div id="netPnlPct" class="small mt-1">0.00%</div>
+                            </div>
+                            <div class="result-card">
+                                <div class="charge-row"><span class="text-muted">Buy Value</span><span id="rBuyVal">₹ 0.00</span></div>
+                                <div class="charge-row"><span class="text-muted">Sell Value</span><span id="rSellVal">₹ 0.00</span></div>
+                                <div class="charge-row"><span class="text-muted">Turnover</span><span id="rTurnover">₹ 0.00</span></div>
+                                <div class="charge-row fw-semibold"><span>Gross P&amp;L</span><span id="rGrossPnl">₹ 0.00</span></div>
+                            </div>
+                        </div>
+                        <div class="col-lg-7">
+                            <div class="result-card">
+                                <div class="fw-semibold mb-2 small text-muted">CHARGE BREAKDOWN</div>
+                                <div class="charge-row"><span>Brokerage</span><span id="rBrokerage">₹ 0.00</span></div>
+                                <div class="charge-row"><span>STT</span><span id="rStt">₹ 0.00</span></div>
+                                <div class="charge-row"><span>Exchange Transaction Charges</span><span id="rExc">₹ 0.00</span></div>
+                                <div class="charge-row"><span>SEBI Charges</span><span id="rSebi">₹ 0.00</span></div>
+                                <div class="charge-row"><span>Stamp Duty</span><span id="rStamp">₹ 0.00</span></div>
+                                <div class="charge-row"><span>DP Charges (Delivery only)</span><span id="rDp">₹ 0.00</span></div>
+                                <div class="charge-row"><span>GST (18%)</span><span id="rGst">₹ 0.00</span></div>
+                                <div class="charge-row fw-semibold border-top pt-2 mt-1"><span>Total Charges</span><span id="rTotal">₹ 0.00</span></div>
+                            </div>
+                            <small class="text-muted d-block mt-2">Approximate calculation. Actual charges may vary slightly.</small>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+    (function () {
+        var broker = 'zerodha';
+        var segment = 'equity_intraday';
+
+        // Broker button toggle
+        document.querySelectorAll('#brokerBtns .broker-btn').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                document.querySelectorAll('#brokerBtns .broker-btn').forEach(function (b) { b.classList.remove('active'); });
+                this.classList.add('active');
+                broker = this.dataset.broker;
+                calculate();
+            });
+        });
+
+        // Segment button toggle
+        document.querySelectorAll('#segmentBtns .segment-btn').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                document.querySelectorAll('#segmentBtns .segment-btn').forEach(function (b) { b.classList.remove('active'); });
+                this.classList.add('active');
+                segment = this.dataset.segment;
+                updateFieldVisibility();
+                calculate();
+            });
+        });
+
+        function updateFieldVisibility() {
+            var isFO = segment === 'fo_futures' || segment === 'fo_options';
+            var isOptions = segment === 'fo_options';
+            document.getElementById('lotsGroup').classList.toggle('d-none', !isFO);
+            document.getElementById('lotSizeGroup').classList.toggle('d-none', !isFO);
+            document.getElementById('premiumGroup').classList.toggle('d-none', !isOptions);
+            document.getElementById('quantityGroup').classList.toggle('d-none', isFO);
+        }
+
+        ['buyPrice', 'sellPrice', 'quantity', 'lots', 'lotSize', 'premium'].forEach(function (id) {
+            var el = document.getElementById(id);
+            if (el) el.addEventListener('input', calculate);
+        });
+
+        function fmt(n) { return '\u20b9 ' + n.toFixed(2); }
+        function r2(n)  { return Math.round(n * 100) / 100; }
+        function fl(n)  { return Math.floor(n * 100) / 100; }
+        function cl(n)  { return Math.ceil(n  * 100) / 100; }
+
+        function calculate() {
+            var buyPrice = parseFloat(document.getElementById('buyPrice').value) || 0;
+            var sellPrice = parseFloat(document.getElementById('sellPrice').value) || 0;
+            var quantity, buyVal, sellVal;
+
+            if (segment === 'fo_futures' || segment === 'fo_options') {
+                var lots = parseInt(document.getElementById('lots').value) || 1;
+                var lotSize = parseInt(document.getElementById('lotSize').value) || 0;
+                quantity = lots * lotSize;
+            } else {
+                quantity = parseInt(document.getElementById('quantity').value) || 0;
+            }
+
+            buyVal = buyPrice * quantity;
+            sellVal = sellPrice * quantity;
+            var turnover = buyVal + sellVal;
+
+            if (!buyVal && !sellVal) { document.getElementById('resultsSection').classList.add('d-none'); return; }
+
+            // ---- Brokerage ----
+            var brokerage;
+            if (segment === 'equity_delivery') {
+                brokerage = 0;
+            } else {
+                var buyBase  = (segment === 'fo_options') ? (parseFloat(document.getElementById('premium').value) || buyPrice) * quantity : buyVal;
+                var sellBase = (segment === 'fo_options') ? (parseFloat(document.getElementById('premium').value) || sellPrice) * quantity : sellVal;
+                if (broker === 'groww' || broker === 'angel') {
+                    brokerage = 40; // Rs20 flat per order
+                } else if (broker === 'upstox') { // min(0.05%, Rs20) per order
+                    brokerage = Math.min(0.0005 * buyBase, 20) + Math.min(0.0005 * sellBase, 20);
+                } else { // zerodha, dhan: min(0.03%, Rs20) per order
+                    brokerage = Math.min(0.0003 * buyBase, 20) + Math.min(0.0003 * sellBase, 20);
+                }
+            }
+            brokerage = r2(brokerage);
+
+            // ---- STT: 0.025% on sell_val, floored ----
+            var stt;
+            if (segment === 'equity_delivery')      stt = fl(0.001 * (buyVal + sellVal));
+            else if (segment === 'equity_intraday') stt = fl(0.00025 * sellVal);
+            else if (segment === 'fo_futures')      stt = fl(0.000125 * sellVal);
+            else                                    stt = fl(0.001 * sellVal);
+
+            // ---- Exchange Transaction Charges ----
+            // Groww: 0.003412% | All others (Zerodha/Upstox/Dhan/Angel): NSE 0.00297%
+            var exc;
+            if (segment === 'equity_delivery' || segment === 'equity_intraday') {
+                exc = fl((broker === 'groww') ? 0.00003412 * turnover : 0.0000297 * turnover);
+            } else if (segment === 'fo_futures') {
+                exc = fl(0.00000173 * turnover);
+            } else {
+                var premBase = (parseFloat(document.getElementById('premium').value) || buyPrice) * quantity;
+                exc = fl(0.0003503 * premBase);
+            }
+
+            // ---- SEBI: ₹10 per crore, floored ----
+            var sebi = fl(0.000001 * turnover);
+
+            // ---- Stamp Duty: 0.003% on buy_val, ceiled ----
+            var stamp;
+            if (segment === 'equity_delivery')      stamp = cl(0.00015 * buyVal);
+            else if (segment === 'equity_intraday') stamp = cl(0.00003 * buyVal);
+            else if (segment === 'fo_futures')      stamp = cl(0.00002 * buyVal);
+            else                                    stamp = cl(0.00003 * buyVal);
+
+            // ---- DP Charges (Delivery only) ----
+            // Angel One: Rs20+GST=Rs23.60 | Upstox: Rs18.5+GST=Rs21.83 | Others (CDSL): Rs13.5+GST=Rs15.93
+            var dp = 0;
+            if (segment === 'equity_delivery') {
+                dp = broker === 'angel' ? 23.60 : broker === 'upstox' ? 21.83 : 15.93;
+            }
+
+            // ---- GST: 18% on (brokerage + exchange + SEBI), rounded ----
+            var gst = r2(0.18 * (brokerage + exc + sebi));
+
+            var totalCharges = r2(brokerage + stt + exc + sebi + stamp + dp + gst);
+            var grossPnl = r2(sellVal - buyVal);
+            var netPnl = r2(grossPnl - totalCharges);
+            var pct = buyVal > 0 ? (netPnl / buyVal * 100).toFixed(2) : '0.00';
+
+            // Update DOM
+            document.getElementById('rBuyVal').textContent = fmt(buyVal);
+            document.getElementById('rSellVal').textContent = fmt(sellVal);
+            document.getElementById('rTurnover').textContent = fmt(turnover);
+            document.getElementById('rGrossPnl').textContent = fmt(grossPnl);
+            document.getElementById('rBrokerage').textContent = fmt(brokerage);
+            document.getElementById('rStt').textContent = fmt(stt);
+            document.getElementById('rExc').textContent = fmt(exc);
+            document.getElementById('rSebi').textContent = fmt(sebi);
+            document.getElementById('rStamp').textContent = fmt(stamp);
+            document.getElementById('rDp').textContent = fmt(dp);
+            document.getElementById('rGst').textContent = fmt(gst);
+            document.getElementById('rTotal').textContent = fmt(totalCharges);
+
+            var pnlEl = document.getElementById('netPnl');
+            var pnlBox = document.getElementById('pnlBox');
+            pnlEl.textContent = fmt(netPnl);
+            document.getElementById('netPnlPct').textContent = (netPnl >= 0 ? '+' : '') + pct + '%';
+            pnlEl.className = 'mb-0 fw-bold ' + (netPnl >= 0 ? 'text-success' : 'text-danger');
+            pnlBox.className = 'pnl-box ' + (netPnl >= 0 ? 'pnl-profit' : 'pnl-loss');
+
+            document.getElementById('resultsSection').classList.remove('d-none');
+        }
+    })();
+    </script>
+</body>
+</html>

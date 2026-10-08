@@ -293,8 +293,15 @@ def map_next_quote_to_legacy(q):
     }
 
 
+# NSE timestamps are epoch ms whose UTC rendering is already IST wall-clock
+# time (a 09:15 IST print arrives as 09:15 UTC). Format in UTC on purpose -
+# adding the +05:30 offset would push every label five and a half hours ahead.
+UTC = timezone.utc
+
+
 def convert_timestamp(timestamp_ms):
-    dt = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
+    """Convert an NSE epoch-millisecond timestamp to market (IST) clock/date."""
+    dt = datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC)
     return dt.strftime("%H:%M:%S"), dt.strftime("%Y-%m-%d")
 
 
@@ -309,6 +316,21 @@ def filter_leading_zeros(data_points):
     return filtered
 
 
+def _live_series(data_points):
+    """Serialize a price series for charting.
+
+    ``timestamps`` (epoch seconds, IST-aligned) lets the client plot a real
+    time axis instead of evenly spaced string labels, so trading gaps render
+    at their true width. ``times`` stays for display/tooltips.
+    """
+    return {
+        "timestamps": [point["timestamp"] / 1000.0 for point in data_points],
+        "times": [point["time"] for point in data_points],
+        "prices": [point["price"] for point in data_points],
+        "all_data": data_points,
+    }
+
+
 def _default_dates():
     to_date = datetime.now()
     from_date = to_date - timedelta(days=15)
@@ -316,6 +338,20 @@ def _default_dates():
         from_date.strftime("%Y-%m-%d"),
         to_date.strftime("%Y-%m-%d"),
     )
+
+
+def _chart_axis_config():
+    """Session windows (minutes from midnight, IST) for the client charts.
+
+    Each intraday chart keeps a fixed, full-width x axis so the plotted line
+    grows within a constant frame instead of the frame rescaling on every poll.
+    """
+    return {
+        "pre_open_open_minute": config.PRE_OPEN_START_MINUTE,
+        "pre_open_close_minute": config.PRE_OPEN_END_MINUTE,
+        "market_open_minute": config.MARKET_OPEN_MINUTE,
+        "market_close_minute": config.MARKET_CLOSE_MINUTE,
+    }
 
 
 @app.route("/", methods=["GET", "POST"])
@@ -336,6 +372,7 @@ def index():
             active_tab="charts",
             default_from=default_from,
             default_to=default_to,
+            **_chart_axis_config(),
         )
 
     # Page shell renders instantly; quote / charts / historical load via
@@ -350,6 +387,7 @@ def index():
         active_tab=active_tab,
         default_from=default_from,
         default_to=default_to,
+        **_chart_axis_config(),
     )
 
 
@@ -442,16 +480,8 @@ def get_live_data():
 
     return jsonify(
         {
-            "pre_open": {
-                "times": [point["time"] for point in filtered_pre_open],
-                "prices": [point["price"] for point in filtered_pre_open],
-                "all_data": filtered_pre_open,
-            },
-            "normal_market": {
-                "times": [point["time"] for point in normal_market_data],
-                "prices": [point["price"] for point in normal_market_data],
-                "all_data": normal_market_data,
-            },
+            "pre_open": _live_series(filtered_pre_open),
+            "normal_market": _live_series(normal_market_data),
             "close_price": (
                 float(dynamic_data.get("closePrice", 0))
                 if dynamic_data.get("closePrice")
@@ -681,6 +711,142 @@ def get_peers():
         "peers": peers,
         "message": message,
     })
+
+
+@app.route('/brokerage-calculator', methods=['GET', 'POST'])
+def brokerage_calculator():
+    result = None
+    error = None
+    form = {
+        'buy_price': request.form.get('buy_price', ''),
+        'sell_price': request.form.get('sell_price', ''),
+        'quantity': request.form.get('quantity', ''),
+        'lots': request.form.get('lots', '1'),
+        'broker': request.form.get('broker', 'zerodha'),
+        'segment': request.form.get('segment', 'equity_intraday'),
+        'strike_price': request.form.get('strike_price', ''),
+        'premium': request.form.get('premium', ''),
+    }
+    if request.method == 'POST':
+        try:
+            buy_price = float(form['buy_price']) if form['buy_price'] else 0
+            sell_price = float(form['sell_price']) if form['sell_price'] else 0
+            quantity = int(float(form['quantity'])) if form['quantity'] else 0
+            broker = form['broker']
+            segment = form['segment']
+
+            buy_val = buy_price * quantity
+            sell_val = sell_price * quantity
+            turnover = buy_val + sell_val
+
+            # ---- Brokerage ----
+            # Zerodha/Dhan : 0 delivery, min(0.03% per order, Rs20)
+            # Upstox       : 0 delivery, min(0.05% per order, Rs20)
+            # Groww/Angel  : 0 delivery, Rs20 flat per order (Rs40 round trip)
+            if segment == 'equity_delivery':
+                brokerage = 0.0
+            elif segment in ('equity_intraday', 'fo_futures'):
+                if broker in ('groww', 'angel'):
+                    brokerage = 40.0
+                elif broker == 'upstox':
+                    brokerage = min(0.0005 * buy_val, 20.0) + min(0.0005 * sell_val, 20.0)
+                else:  # zerodha, dhan
+                    brokerage = min(0.0003 * buy_val, 20.0) + min(0.0003 * sell_val, 20.0)
+            elif segment == 'fo_options':
+                premium = float(form['premium']) if form['premium'] else buy_price
+                premium_turnover = premium * quantity
+                if broker in ('groww', 'angel'):
+                    brokerage = 40.0
+                elif broker == 'upstox':
+                    brokerage = min(0.0005 * premium_turnover, 20.0) * 2
+                else:  # zerodha, dhan
+                    brokerage = min(0.0003 * premium_turnover, 20.0) * 2
+            else:
+                brokerage = 0.0
+            brokerage = round(brokerage, 2)
+
+            # Groww charge computation helpers
+            import math
+            def fl(x): return int(x * 100) / 100.0          # floor to paisa
+            def cl(x): return math.ceil(x * 100) / 100.0    # ceil to paisa
+
+            # ---- STT: 0.025% on sell_val, floored to paisa ----
+            if segment == 'equity_delivery':
+                stt = fl(0.001 * (buy_val + sell_val))
+            elif segment == 'equity_intraday':
+                stt = fl(0.00025 * sell_val)
+            elif segment == 'fo_futures':
+                stt = fl(0.000125 * sell_val)
+            elif segment == 'fo_options':
+                stt = fl(0.001 * sell_val)
+            else:
+                stt = 0.0
+
+            # ---- Exchange Transaction Charges ----
+            # Groww: 0.003412% of turnover
+            # All others (Zerodha/Upstox/Dhan/Angel): NSE standard 0.00297%
+            if segment in ('equity_delivery', 'equity_intraday'):
+                exc = fl(0.00003412 * turnover) if broker == 'groww' else fl(0.0000297 * turnover)
+            elif segment == 'fo_futures':
+                exc = fl(0.00000173 * turnover)
+            elif segment == 'fo_options':
+                exc = fl(0.0003503 * (buy_val + sell_val) / 2)
+            else:
+                exc = 0.0
+
+            # ---- SEBI Charges: ₹10 per crore, floored ----
+            sebi = fl(0.000001 * turnover)
+
+            # ---- Stamp Duty: 0.003% on buy_val, ceiled to paisa ----
+            if segment == 'equity_delivery':
+                stamp = cl(0.00015 * buy_val)
+            elif segment == 'equity_intraday':
+                stamp = cl(0.00003 * buy_val)
+            elif segment == 'fo_futures':
+                stamp = cl(0.00002 * buy_val)
+            elif segment == 'fo_options':
+                stamp = cl(0.00003 * buy_val)
+            else:
+                stamp = 0.0
+
+            # ---- DP Charges: delivery sell side only ----
+            # Angel One: ₹20 + 18% GST = ₹23.60
+            # Upstox   : ₹18.5 + 18% GST = ₹21.83
+            # Others   : ₹13.5 + 18% GST = ₹15.93 (CDSL)
+            if segment == 'equity_delivery':
+                if broker == 'angel':  dp = round(20 * 1.18, 2)
+                elif broker == 'upstox': dp = round(18.5 * 1.18, 2)
+                else: dp = round(13.5 * 1.18, 2)
+            else:
+                dp = 0.0
+
+            # ---- GST: 18% on (brokerage + exchange + SEBI), rounded ----
+            gst = round(0.18 * (brokerage + exc + sebi), 2)
+
+            total_charges = round(brokerage + stt + exc + sebi + stamp + dp + gst, 2)
+            gross_pnl = round(sell_val - buy_val, 2)
+            net_profit = round(gross_pnl - total_charges, 2)
+            profit_pct = round((net_profit / buy_val * 100), 2) if buy_val > 0 else 0
+
+            result = {
+                'buy_value': round(buy_val, 2),
+                'sell_value': round(sell_val, 2),
+                'turnover': round(turnover, 2),
+                'gross_pnl': gross_pnl,
+                'brokerage': brokerage,
+                'stt': stt,
+                'exchange_charges': exc,
+                'sebi_charges': sebi,
+                'stamp_duty': stamp,
+                'dp_charges': dp,
+                'gst': gst,
+                'total_charges': total_charges,
+                'net_profit': net_profit,
+                'profit_percent': profit_pct,
+            }
+        except Exception as e:
+            error = str(e)
+    return render_template('brokerage_calculator.html', form=form, result=result, error=error)
 
 
 if __name__ == "__main__":

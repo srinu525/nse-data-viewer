@@ -8,6 +8,19 @@
     var hasSymbol = !!CONFIG.symbol;
     var activeTab = CONFIG.activeTab || 'charts';
 
+    // Fixed x-axis windows (minutes from midnight, IST) per intraday chart, so
+    // each one always renders at its full native session width.
+    var SESSION_WINDOWS = {
+        preOpen: {
+            open: CONFIG.preOpenOpenMinute != null ? CONFIG.preOpenOpenMinute : 9 * 60,
+            close: CONFIG.preOpenCloseMinute != null ? CONFIG.preOpenCloseMinute : 9 * 60 + 15
+        },
+        normalMarket: {
+            open: CONFIG.marketOpenMinute != null ? CONFIG.marketOpenMinute : 9 * 60 + 15,
+            close: CONFIG.marketCloseMinute != null ? CONFIG.marketCloseMinute : 15 * 60 + 30
+        }
+    };
+
     // ---------------- Market-hours awareness (IST) ----------------
     function istNow() {
         var parts = new Date().toLocaleString('en-US', { hour12: false, timeZone: 'Asia/Kolkata' });
@@ -589,6 +602,176 @@
     var lastPreOpenData = null;
     var lastNormalMarketData = null;
 
+    // NSE timestamps already read as IST wall clock in UTC, so ticks must be
+    // formatted in UTC - applying Asia/Kolkata here would shift every label
+    // forward by 05:30.
+    var MARKET_CLOCK_FORMAT = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'utc',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false
+    });
+
+    // Candidate x-axis tick spacings (seconds).
+    var TIME_TICK_STEPS = [30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600];
+
+    function epochToClock(epochSeconds) {
+        if (typeof epochSeconds !== 'number' || !isFinite(epochSeconds)) return '';
+        return MARKET_CLOCK_FORMAT.format(new Date(epochSeconds * 1000));
+    }
+
+    // Builds the fixed [min, max] pair for a session window. Timestamps are
+    // IST-aligned - their UTC rendering already reads as IST wall clock (see
+    // convert_timestamp in app.py) - so the bounds are built with Date.UTC on
+    // the date the data itself carries, keeping them in that same coordinate
+    // system. Anchoring to the data rather than "today" also survives a chart
+    // left open across a day rollover.
+    function sessionBounds(points, sessionWindow) {
+        var reference = null;
+        for (var i = points.length - 1; i >= 0; i--) {
+            if (isFinite(points[i].x)) { reference = points[i].x; break; }
+        }
+        if (reference === null) return null;
+
+        var d = new Date(reference * 1000);
+        var year = d.getUTCFullYear();
+        var month = d.getUTCMonth();
+        var day = d.getUTCDate();
+        var min = Date.UTC(year, month, day,
+            Math.floor(sessionWindow.open / 60), sessionWindow.open % 60) / 1000;
+        var max = Date.UTC(year, month, day,
+            Math.floor(sessionWindow.close / 60), sessionWindow.close % 60) / 1000;
+        if (!(max > min)) return null;
+        return { min: min, max: max };
+    }
+
+    // The x scale is linear in real time, so Chart.js' default "nice" numbers
+    // would produce huge epoch labels. Replace them with evenly spaced clock
+    // ticks sized to the visible width and range. The scale is pinned to the
+    // session window, which rarely lands on a step multiple (09:15 is not a
+    // whole hour), so both edges are pinned in as labelled ticks - otherwise
+    // the fixed boundaries stay unlabelled and the range is unreadable.
+    function buildTimeTicks(axis) {
+        var min = axis.min;
+        var max = axis.max;
+        if (!isFinite(min) || !isFinite(max) || max <= min) return;
+
+        var target = Math.max(2, Math.min(12, Math.floor((axis.width || 600) / 85)));
+        var span = max - min;
+        var step = TIME_TICK_STEPS[TIME_TICK_STEPS.length - 1];
+        for (var i = 0; i < TIME_TICK_STEPS.length; i++) {
+            if (span / TIME_TICK_STEPS[i] <= target) { step = TIME_TICK_STEPS[i]; break; }
+        }
+
+        var ticks = [];
+        function addTick(value) {
+            for (var t = 0; t < ticks.length; t++) {
+                if (Math.abs(ticks[t].value - value) < 1) return;
+            }
+            ticks.push({ value: value, label: epochToClock(value) });
+        }
+
+        addTick(min);
+        for (var value = Math.ceil(min / step) * step; value <= max; value += step) {
+            addTick(value);
+        }
+        addTick(max);
+        ticks.sort(function (a, b) { return a.value - b.value; });
+
+        if (ticks.length >= 2) axis.ticks = ticks;
+    }
+
+    // Turns a series into {x: epochSeconds, y: price} points; timestamps are
+    // required so the axis stays proportional to real elapsed time.
+    function toChartPoints(series) {
+        var points = [];
+        if (!series || !series.prices || !series.timestamps) return points;
+        var count = Math.min(series.prices.length, series.timestamps.length);
+        for (var i = 0; i < count; i++) {
+            var epoch = series.timestamps[i];
+            var price = series.prices[i];
+            if (isFinite(epoch) && isFinite(price)) points.push({ x: epoch, y: price });
+        }
+        return points;
+    }
+
+    function hasChartPoints(series) {
+        return toChartPoints(series).length > 0;
+    }
+
+    function lastPrice(series) {
+        if (!series || !series.prices || !series.prices.length) return null;
+        var price = series.prices[series.prices.length - 1];
+        return isFinite(price) ? price : null;
+    }
+
+    // The x scale is pinned to the full session window at all times, so a
+    // zoom/pan can only be recognised by the bounds having moved away from that
+    // window. Testing min/max for presence would report "zoomed" permanently.
+    function isZoomed(options) {
+        var xScale = options.scales.x;
+        if (xScale.min === undefined || xScale.min === null ||
+            xScale.max === undefined || xScale.max === null) {
+            return false;
+        }
+        var fullScale = options.__fullScale;
+        if (!fullScale) return true;
+        return Math.abs(xScale.min - fullScale.min) > 1 ||
+            Math.abs(xScale.max - fullScale.max) > 1;
+    }
+
+    // Re-pins the x axis to the full session window and re-fits y to the data.
+    // While zoomed, x is left to the zoom plugin and y is handed back to
+    // Chart.js so it tracks only the visible window.
+    function applyAxisRanges(options, points) {
+        if (isZoomed(options)) {
+            options.scales.y.min = undefined;
+            options.scales.y.max = undefined;
+            return;
+        }
+
+        if (options.__sessionWindow) {
+            var fullScale = sessionBounds(points, options.__sessionWindow);
+            if (fullScale) {
+                options.__fullScale = fullScale;
+                options.scales.x.min = fullScale.min;
+                options.scales.x.max = fullScale.max;
+            }
+        }
+        applyPriceRange(options, points);
+    }
+
+    // The prev-close line is only drawn while it sits inside the y range, so
+    // the full view forces it in. Once the user zooms, the range follows the
+    // visible window only - keeping a distant reference level in view would
+    // squash the price movement they asked to inspect.
+    function applyPriceRange(options, points) {
+        var yScale = options.scales.y;
+        if (isZoomed(options)) {
+            yScale.min = undefined;
+            yScale.max = undefined;
+            return;
+        }
+
+        var low = Infinity;
+        var high = -Infinity;
+        for (var i = 0; i < points.length; i++) {
+            if (points[i].y < low) low = points[i].y;
+            if (points[i].y > high) high = points[i].y;
+        }
+        if (!isFinite(low) || !isFinite(high)) return;
+
+        if (prevClosePrice > 0) {
+            low = Math.min(low, prevClosePrice);
+            high = Math.max(high, prevClosePrice);
+        }
+        if (low === high) { low -= 1; high += 1; }
+
+        var padding = (high - low) * 0.06;
+        yScale.min = low - padding;
+        yScale.max = high + padding;
+    }
+
     function buildPrevCloseAnnotation() {
         if (!prevClosePrice) return {};
         return {
@@ -614,6 +797,7 @@
         [preOpenChartInstance, normalMarketChartInstance].forEach(function (chart) {
             if (chart && chart.options && chart.options.plugins) {
                 chart.options.plugins.annotation.annotations = buildPrevCloseAnnotation();
+                applyAxisRanges(chart.options, chart.data.datasets[0].data);
                 chart.update();
             }
         });
@@ -635,6 +819,9 @@
                     mode: 'index',
                     intersect: false,
                     callbacks: {
+                        title: function (items) {
+                            return items.length ? epochToClock(items[0].parsed.x) : '';
+                        },
                         label: function (context) {
                             return context.dataset.label + ': \u20B9' + context.parsed.y.toFixed(2);
                         }
@@ -650,12 +837,20 @@
             },
             scales: {
                 x: {
-                    title: { display: true, text: 'Time' },
-                    ticks: { maxRotation: 45, minRotation: 45, autoSkip: true, maxTicksLimit: 20 }
+                    type: 'linear',
+                    title: { display: true, text: 'Time (IST)' },
+                    ticks: {
+                        maxRotation: 0,
+                        minRotation: 0,
+                        autoSkip: false,
+                        callback: function (value) { return epochToClock(value); }
+                    },
+                    afterBuildTicks: buildTimeTicks
                 },
                 y: {
                     title: { display: true, text: 'Price (\u20B9)' },
                     beginAtZero: false,
+                    grace: '8%',
                     ticks: {
                         callback: function (value) { return '\u20B9' + value.toFixed(2); }
                     }
@@ -664,13 +859,28 @@
         }
     };
 
+    // Per-chart option copy: scales must be cloned, otherwise writing y.min on
+    // one chart would leak into the shared config and the other chart.
+    function buildChartOptions(titleText, sessionWindow) {
+        return {
+            ...chartConfig.options,
+            scales: {
+                ...chartConfig.options.scales,
+                x: { ...chartConfig.options.scales.x },
+                y: { ...chartConfig.options.scales.y }
+            },
+            plugins: {
+                ...chartConfig.options.plugins,
+                title: { display: true, text: titleText }
+            },
+            __sessionWindow: sessionWindow,
+            __fullScale: null
+        };
+    }
+
     function noChartData(state) {
         var el = document.getElementById('noChartData');
         if (el) el.classList.toggle('d-none', !state);
-    }
-
-    function yScaleMin(yMin) {
-        return prevClosePrice > 0 ? Math.min(yMin, prevClosePrice * 0.99) : yMin;
     }
 
     function initializeCharts() {
@@ -692,77 +902,52 @@
             return;
         }
 
+        var now = new Date().toLocaleTimeString();
+
         var preOpenCanvas = document.getElementById('preOpenChart');
-        if (preOpenCanvas && dynamicChart.pre_open && dynamicChart.pre_open.times.length > 0) {
-            var preOpenPrices = dynamicChart.pre_open.prices;
-
+        if (preOpenCanvas && !preOpenChartInstance) {
             document.getElementById('preOpenChartContainer').classList.remove('d-none');
-            var yMin = Math.min.apply(null, preOpenPrices.filter(function (p) { return p > 0; })) * 0.99;
-
+            var preOpenPoints = toChartPoints(dynamicChart.pre_open);
+            var preOpenOptions = buildChartOptions(currentSymbol + ' Pre-Open Market Prices', SESSION_WINDOWS.preOpen);
+            if (preOpenPoints.length > 0) applyAxisRanges(preOpenOptions, preOpenPoints);
             preOpenChartInstance = new Chart(preOpenCanvas.getContext('2d'), {
                 ...chartConfig,
                 data: {
-                    labels: dynamicChart.pre_open.times,
                     datasets: [{
                         label: 'Pre-Open Price',
-                        data: preOpenPrices,
+                        data: preOpenPoints,
                         borderColor: 'rgba(255, 99, 132, 1)',
                         backgroundColor: 'rgba(255, 99, 132, 0.1)',
                         fill: true
                     }]
                 },
-                options: {
-                    ...chartConfig.options,
-                    scales: {
-                        ...chartConfig.options.scales,
-                        y: { ...chartConfig.options.scales.y, min: yScaleMin(yMin) }
-                    },
-                    plugins: {
-                        ...chartConfig.options.plugins,
-                        title: { display: true, text: currentSymbol + ' Pre-Open Market Prices' }
-                    }
-                }
+                options: preOpenOptions
             });
             lastPreOpenData = dynamicChart.pre_open;
-            document.getElementById('preOpenLastUpdated').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+            document.getElementById('preOpenLastUpdated').textContent = 'Last updated: ' + now;
         }
 
         var normalMarketCanvas = document.getElementById('normalMarketChart');
-        if (normalMarketCanvas && dynamicChart.normal_market && dynamicChart.normal_market.times.length > 0) {
-            var normalPrices = dynamicChart.normal_market.prices;
-
+        if (normalMarketCanvas && !normalMarketChartInstance) {
             document.getElementById('normalMarketChartContainer').classList.remove('d-none');
-            var yMin2 = Math.min.apply(null, normalPrices.filter(function (p) { return p > 0; })) * 0.99;
-
+            var normalMarketPoints = toChartPoints(dynamicChart.normal_market);
+            var normalMarketOptions = buildChartOptions(currentSymbol + ' Normal Market Prices', SESSION_WINDOWS.normalMarket);
+            if (normalMarketPoints.length > 0) applyAxisRanges(normalMarketOptions, normalMarketPoints);
             normalMarketChartInstance = new Chart(normalMarketCanvas.getContext('2d'), {
                 ...chartConfig,
                 data: {
-                    labels: dynamicChart.normal_market.times,
                     datasets: [{
                         label: 'Market Price',
-                        data: normalPrices,
+                        data: normalMarketPoints,
                         borderColor: 'rgba(54, 162, 235, 1)',
                         backgroundColor: 'rgba(54, 162, 235, 0.1)',
                         fill: true
                     }]
                 },
-                options: {
-                    ...chartConfig.options,
-                    scales: {
-                        ...chartConfig.options.scales,
-                        y: { ...chartConfig.options.scales.y, min: yScaleMin(yMin2) }
-                    },
-                    plugins: {
-                        ...chartConfig.options.plugins,
-                        title: {
-                            display: true,
-                            text: currentSymbol + ' Normal Market Prices'
-                        }
-                    }
-                }
+                options: normalMarketOptions
             });
             lastNormalMarketData = dynamicChart.normal_market;
-            document.getElementById('normalMarketLastUpdated').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+            document.getElementById('normalMarketLastUpdated').textContent = 'Last updated: ' + now;
         }
 
         var closePrice = dynamicChart.close_price;
@@ -772,10 +957,6 @@
                 badge.textContent = 'Closing Price: \u20B9' + closePrice.toFixed(2);
                 badge.classList.remove('d-none');
             }
-        }
-
-        if (!preOpenChartInstance && !normalMarketChartInstance) {
-            noChartData(true);
         }
     }
 
@@ -804,24 +985,29 @@
                     return;
                 }
 
-                if (!preOpenChartInstance && data.pre_open && data.pre_open.times.length > 0) {
+                if (!preOpenChartInstance || !normalMarketChartInstance) {
                     createChartsFromData(data);
                     return;
                 }
 
                 if (preOpenChartInstance && data.pre_open) {
+                    var preOpenLast = lastPrice(data.pre_open);
+                    var preOpenTitle = currentSymbol + ' Pre-Open Market Prices';
+                    if (preOpenLast !== null) preOpenTitle += ' | Latest: \u20B9' + preOpenLast.toFixed(2);
                     smoothUpdateChart(
                         preOpenChartInstance,
                         data.pre_open,
                         lastPreOpenData,
-                        currentSymbol + ' Pre-Open Market Prices | Latest: \u20B9' + data.pre_open.prices.slice(-1)[0].toFixed(2)
+                        preOpenTitle
                     );
                     lastPreOpenData = data.pre_open;
                     document.getElementById('preOpenLastUpdated').textContent = 'Last updated: ' + now;
                 }
 
                 if (normalMarketChartInstance && data.normal_market) {
-                    var title = currentSymbol + ' Normal Market Prices | Latest: \u20B9' + data.normal_market.prices.slice(-1)[0].toFixed(2);
+                    var normalLast = lastPrice(data.normal_market);
+                    var title = currentSymbol + ' Normal Market Prices';
+                    if (normalLast !== null) title += ' | Latest: \u20B9' + normalLast.toFixed(2);
                     if (data.close_price) title += ' | Close: \u20B9' + data.close_price.toFixed(2);
                     smoothUpdateChart(
                         normalMarketChartInstance,
@@ -846,37 +1032,32 @@
     }
 
     function smoothUpdateChart(chartInstance, newData, oldData, newTitle) {
-        var newTimes = newData.times;
-        var newPrices = newData.prices;
-
-        if (oldData && JSON.stringify(oldData.times) === JSON.stringify(newTimes) &&
-            JSON.stringify(oldData.prices) === JSON.stringify(newPrices)) {
+        if (oldData && JSON.stringify(oldData.times) === JSON.stringify(newData.times) &&
+            JSON.stringify(oldData.prices) === JSON.stringify(newData.prices)) {
             return;
         }
 
-        chartInstance.data.labels = newTimes;
-        chartInstance.data.datasets[0].data = newPrices;
+        var points = toChartPoints(newData);
+        chartInstance.data.datasets[0].data = points;
         if (newTitle) chartInstance.options.plugins.title.text = newTitle;
 
-        var minPrice = Math.min.apply(null, newPrices.filter(function (p) { return p > 0; }));
-        chartInstance.options.scales.y.min = prevClosePrice > 0 ?
-            Math.min(minPrice * 0.99, prevClosePrice * 0.99) : minPrice * 0.99;
-
+        applyAxisRanges(chartInstance.options, points);
         chartInstance.update();
     }
 
     function resetZoom(chartId) {
         var chart = chartId === 'preOpenChart' ? preOpenChartInstance : normalMarketChartInstance;
-        if (chart) chart.resetZoom();
-    }
-
-    function showAllData(chartId) {
-        var chart = chartId === 'preOpenChart' ? preOpenChartInstance : normalMarketChartInstance;
         if (chart) {
-            chart.options.scales.x.min = undefined;
-            chart.options.scales.x.max = undefined;
+            chart.resetZoom();
+            applyAxisRanges(chart.options, chart.data.datasets[0].data);
             chart.update();
         }
+    }
+
+    // "Show all" and "reset zoom" now mean the same thing: the full fixed
+    // session window.
+    function showAllData(chartId) {
+        resetZoom(chartId);
     }
 
     // ---------------- Bootstrap ----------------

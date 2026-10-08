@@ -41,8 +41,10 @@ CHART_UPDATE_INTERVAL_OPEN = 4000
 CHART_UPDATE_INTERVAL_CLOSED = 60000
 
 # Market hours (IST, minutes from midnight) - Mon-Fri only
-MARKET_OPEN_MINUTE = 9 * 60          # 09:00
-MARKET_CLOSE_MINUTE = 15 * 60 + 30   # 15:30
+PRE_OPEN_START_MINUTE = 9 * 60          # 09:00
+PRE_OPEN_END_MINUTE = 9 * 60 + 15       # 09:15
+MARKET_OPEN_MINUTE = 9 * 60 + 15        # 09:15
+MARKET_CLOSE_MINUTE = 15 * 60 + 30      # 15:30
 
 # Stock list refresh TTL (seconds) for in-memory CSV cache
 STOCKS_CACHE_TTL = 900

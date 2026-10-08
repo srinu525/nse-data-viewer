@@ -1,7 +1,9 @@
 import csv
 import logging
+import os
 import random
 import re
+import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 from threading import Lock
@@ -12,6 +14,15 @@ from flask import Flask, render_template, jsonify, request
 import config
 
 app = Flask(__name__)
+
+
+@app.template_filter("inr")
+def inr_filter(value):
+    """Format a number for display: grouping with 2 decimals, dash for blanks."""
+    if value is None:
+        return "—"
+    return f"{value:,.2f}"
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -847,6 +858,370 @@ def brokerage_calculator():
         except Exception as e:
             error = str(e)
     return render_template('brokerage_calculator.html', form=form, result=result, error=error)
+
+
+TARGET_DEFAULTS = {
+    'capital': '10000',
+    'target_pct': '1',
+    'start_date': '',
+    'days': '100',
+}
+MAX_TARGET_DAYS = 1000
+TARGET_MILESTONES = (30, 100, 365, 1000)
+
+
+def compute_target_plan(capital, target_pct, start_date, days, daily_pnl=None,
+                        holidays=None, weekends_as_holidays=True):
+    """Build the day-by-day plan from the 'Target' sheet of DreamProject.xlsx.
+
+    Target side: the balance compounds at ``target_pct`` per day
+    (profit = investment x pct, closing = investment + profit, and the next
+    day invests the previous closing balance).
+
+    Achievement side: you type each day's profit/loss (column H of the sheet).
+    Net P/L adds every entry to a running total and Difference compares that
+    with the accumulated target. 'Today Target Amount' adapts to the gap: the
+    day's target profit minus the last difference (zero before the first
+    entry), so it shows what today must earn to get back on track. Rows
+    without an entry show blank Net P/L / Difference, as in the sheet.
+
+    Holidays (Saturdays and Sundays by default, plus any dates in
+    ``holidays``) do not trade: no compounding, no target and no P/L row
+    values - the next trading day continues from the same balance.
+    """
+    entered = list(daily_pnl or [])
+    holiday_set = {
+        h.isoformat() if hasattr(h, 'isoformat') else str(h)
+        for h in (holidays or [])
+    }
+    rate = target_pct / 100.0
+
+    rows = []
+    target_invest = capital
+    net_target = 0.0
+    net_pnl = 0.0
+    last_diff = 0.0
+    last_entry_index = None
+
+    for i in range(days):
+        row_date = start_date + timedelta(days=i)
+        weekend = row_date.weekday() >= 5
+        is_holiday = (weekend and weekends_as_holidays) or row_date.isoformat() in holiday_set
+
+        if is_holiday:
+            rows.append({
+                "day": i + 1,
+                "date": row_date.strftime("%d/%m/%Y"),
+                "iso": row_date.isoformat(),
+                "t_invest": target_invest,
+                "t_pct": target_pct,
+                "t_pct_text": f"{target_pct:g}%",
+                "t_profit": None,
+                "t_close": target_invest,
+                "today_target": None,
+                "pnl": None,
+                "net_pnl": None,
+                "t_net": net_target,
+                "diff": None,
+                "holiday": True,
+                "weekend": weekend,
+            })
+            continue
+
+        target_profit = target_invest * rate
+        target_close = target_invest + target_profit
+        net_target += target_profit
+
+        today_target = target_profit - last_diff
+        pnl = entered[i] if i < len(entered) else None
+        row_net = None
+        diff = None
+        if pnl is not None:
+            net_pnl += pnl
+            row_net = net_pnl
+            diff = row_net - net_target
+            last_diff = diff
+            last_entry_index = i
+
+        rows.append({
+            "day": i + 1,
+            "date": row_date.strftime("%d/%m/%Y"),
+            "iso": row_date.isoformat(),
+            "t_invest": target_invest,
+            "t_pct": target_pct,
+            "t_pct_text": f"{target_pct:g}%",
+            "t_profit": target_profit,
+            "t_close": target_close,
+            "today_target": today_target,
+            "pnl": pnl,
+            "net_pnl": row_net,
+            "t_net": net_target,
+            "diff": diff,
+            "holiday": False,
+            "weekend": weekend,
+        })
+        target_invest = target_close
+
+    tradable = [r for r in rows if not r["holiday"]]
+    first_missing = next(
+        (i for i, r in enumerate(rows) if not r["holiday"] and r["pnl"] is None), None)
+    if first_missing is not None:
+        req_i = first_missing
+    elif tradable:
+        req_i = rows.index(tradable[-1])
+    else:
+        req_i = days - 1
+
+    summary = {
+        "days": days,
+        "trading_days": len(tradable),
+        "holiday_count": days - len(tradable),
+        "target_close": rows[-1]["t_close"],
+        "target_profit_total": net_target,
+        "next_day": req_i + 1,
+        "next_today_target": rows[req_i]["today_target"],
+        "all_tracked": first_missing is None,
+        "net_pnl": net_pnl if last_entry_index is not None else None,
+        "entry_day": None if last_entry_index is None else last_entry_index + 1,
+        "entry_date": None if last_entry_index is None else rows[last_entry_index]["date"],
+        "net_target_at_entry": None if last_entry_index is None else rows[last_entry_index]["t_net"],
+        "difference": None if last_entry_index is None else rows[last_entry_index]["diff"],
+        "milestones": [
+            {
+                "day": n,
+                "balance": capital * (1 + rate) ** n,
+                "profit": capital * ((1 + rate) ** n - 1),
+            }
+            for n in TARGET_MILESTONES
+        ],
+    }
+    return rows, summary
+
+
+TARGET_DB_PATH = os.environ.get('NSE_TARGET_DB') or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), 'target.db')
+
+
+def _target_conn():
+    conn = sqlite3.connect(TARGET_DB_PATH, timeout=5)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_target_db():
+    with _target_conn() as conn:
+        conn.execute('''CREATE TABLE IF NOT EXISTS target_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            capital REAL NOT NULL,
+            target_pct REAL NOT NULL,
+            start_date TEXT NOT NULL,
+            days INTEGER NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS target_entries (
+            day INTEGER PRIMARY KEY,
+            pnl REAL NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS target_holidays (
+            date TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )''')
+
+
+def load_target_state():
+    """Return the saved settings row (as None if never saved) and {day: pnl}."""
+    init_target_db()
+    with _target_conn() as conn:
+        row = conn.execute(
+            'SELECT capital, target_pct, start_date, days FROM target_settings WHERE id = 1'
+        ).fetchone()
+        entries = {
+            int(r['day']): float(r['pnl'])
+            for r in conn.execute('SELECT day, pnl FROM target_entries')
+        }
+    return (dict(row) if row else None), entries
+
+
+def load_holidays():
+    """Saved extra holidays as ISO dates (weekends are always holidays)."""
+    init_target_db()
+    with _target_conn() as conn:
+        return [r['date'] for r in
+                conn.execute('SELECT date FROM target_holidays ORDER BY date')]
+
+
+def save_holidays(dates):
+    init_target_db()
+    with _target_conn() as conn:
+        conn.execute('DELETE FROM target_holidays')
+        conn.executemany(
+            'INSERT OR IGNORE INTO target_holidays (date) VALUES (?)',
+            [(d,) for d in dates],
+        )
+
+
+def save_target_state(values, pnls):
+    """Persist settings plus the day-indexed P/L entries (None clears a day)."""
+    init_target_db()
+    with _target_conn() as conn:
+        conn.execute(
+            '''INSERT INTO target_settings (id, capital, target_pct, start_date, days, updated_at)
+               VALUES (1, ?, ?, ?, ?, datetime('now'))
+               ON CONFLICT(id) DO UPDATE SET capital=excluded.capital,
+               target_pct=excluded.target_pct, start_date=excluded.start_date,
+               days=excluded.days, updated_at=datetime('now')''',
+            (values['capital'], values['target_pct'],
+             values['start_date'].isoformat(), values['days']),
+        )
+        conn.execute('DELETE FROM target_entries')
+        conn.executemany(
+            'INSERT INTO target_entries (day, pnl) VALUES (?, ?)',
+            [(i + 1, p) for i, p in enumerate(pnls) if p is not None],
+        )
+
+
+def _parse_target_settings(raw):
+    """Validate capital / % / days / start date. Returns (form, values, error)."""
+    form = {}
+    for k in TARGET_DEFAULTS:
+        v = raw.get(k)
+        form[k] = '' if v is None else str(v).strip()
+    error = None
+    try:
+        capital = float(form['capital'])
+        if capital <= 0:
+            error = 'Starting capital must be greater than 0.'
+    except ValueError:
+        error = 'Starting capital must be a number.'
+
+    target_pct = days = start_date = None
+    if error is None:
+        try:
+            target_pct = float(form['target_pct'])
+            if not 0 <= target_pct <= 100:
+                error = 'Target % must be between 0 and 100.'
+        except ValueError:
+            error = 'Target % must be a number.'
+
+    if error is None:
+        try:
+            days = int(form['days'])
+            if not 1 <= days <= MAX_TARGET_DAYS:
+                error = f'Days must be between 1 and {MAX_TARGET_DAYS}.'
+        except ValueError:
+            error = 'Days must be a whole number.'
+
+    if error is None:
+        try:
+            start_date = datetime.strptime(form['start_date'], '%Y-%m-%d').date()
+        except ValueError:
+            error = 'Start date must be a valid date.'
+
+    if error is not None:
+        return form, None, error
+    return form, {'capital': capital, 'target_pct': target_pct,
+                  'days': days, 'start_date': start_date}, None
+
+
+def _parse_pnl_list(raw_items):
+    """Accept a list of daily P/L values (numbers, blanks or None)."""
+    pnls = []
+    for raw in raw_items or []:
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            pnls.append(None)
+            continue
+        try:
+            pnls.append(float(raw))
+        except (TypeError, ValueError):
+            return None, 'Profit/loss must be a number.'
+    return pnls, None
+
+
+def _parse_holidays(raw_items):
+    """Accept a list of holiday dates (ISO format)."""
+    dates = []
+    for raw in raw_items or []:
+        s = str(raw).strip()
+        if not s:
+            continue
+        try:
+            datetime.strptime(s, '%Y-%m-%d')
+        except ValueError:
+            return None, 'Holiday dates must be in YYYY-MM-DD format.'
+        dates.append(s)
+    return dates, None
+
+
+@app.route('/target', methods=['GET', 'POST'])
+def target():
+    saved, saved_entries = load_target_state()
+    defaults = dict(TARGET_DEFAULTS, start_date=datetime.now().date().isoformat())
+    if saved:
+        defaults.update({
+            'capital': f"{saved['capital']:g}",
+            'target_pct': f"{saved['target_pct']:g}",
+            'start_date': saved['start_date'],
+            'days': str(saved['days']),
+        })
+
+    form = defaults
+    rows = summary = None
+    pnl_values = []
+    holidays = load_holidays()
+    error = None
+
+    if request.method == 'POST':
+        form, values, error = _parse_target_settings(request.form)
+        if error is None:
+            pnls, error = _parse_pnl_list(request.form.getlist('pnl'))
+        if error is None:
+            save_target_state(values, pnls[:values['days']])
+            rows, summary = compute_target_plan(
+                values['capital'], values['target_pct'],
+                values['start_date'], values['days'], pnls[:values['days']],
+                holidays=holidays,
+            )
+            pnl_values = [r.strip() for r in request.form.getlist('pnl')[:values['days']]]
+            pnl_values += [''] * (values['days'] - len(pnl_values))
+    else:
+        days = int(defaults['days'])
+        start = datetime.strptime(defaults['start_date'], '%Y-%m-%d').date()
+        pnls = [saved_entries.get(d) for d in range(1, days + 1)]
+        rows, summary = compute_target_plan(
+            float(defaults['capital']), float(defaults['target_pct']),
+            start, days, pnls, holidays=holidays,
+        )
+        pnl_values = [format(p, '.10g') if p is not None else '' for p in pnls]
+
+    return render_template(
+        'target.html',
+        form=form,
+        rows=rows,
+        summary=summary,
+        pnl_values=pnl_values,
+        holidays=holidays,
+        error=error,
+    )
+
+
+@app.route('/target/save', methods=['POST'])
+def target_save():
+    """Debounced save from the page's live editor (JSON body)."""
+    data = request.get_json(silent=True) or {}
+    _, values, error = _parse_target_settings(data)
+    pnls = []
+    if error is None:
+        pnls, error = _parse_pnl_list(data.get('pnls'))
+    hol = None
+    if error is None and 'holidays' in data:
+        hol, error = _parse_holidays(data.get('holidays'))
+    if error is not None:
+        return jsonify(error=error), 400
+    save_target_state(values, pnls[:values['days']])
+    if hol is not None:
+        save_holidays(hol)
+    return jsonify(ok=True)
 
 
 if __name__ == "__main__":

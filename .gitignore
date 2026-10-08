@@ -14,3 +14,5 @@ _archive/
 # OS
 .DS_Store
 Thumbs.db
+# Target tracker state
+target.db

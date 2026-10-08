@@ -151,6 +151,10 @@
     }
 
     function loadPeers() {
+        var table = document.getElementById('peersTable');
+        var empty = document.getElementById('peersEmpty');
+        if (table) table.classList.add('d-none');
+        if (empty) empty.classList.add('d-none');
         showPeersStatus('Loading peer data...', false);
 
         fetch('/get_peers?symbol=' + encodeURIComponent(currentSymbol))
@@ -250,6 +254,24 @@
                     }
                     document.getElementById('indicesLastUpdated').textContent =
                         'Last updated: ' + new Date().toLocaleTimeString();
+
+                    // Update Nifty 50 in navbar
+                    var nifty = data.find(function (d) {
+                        return d.symbol === 'NIFTY 50' || d.symbol === 'Nifty 50';
+                    });
+                    if (nifty) {
+                        var navBar = document.getElementById('niftyNavBar');
+                        var navPrice = document.getElementById('niftyNavPrice');
+                        var navChange = document.getElementById('niftyNavChange');
+                        if (navBar) navBar.classList.remove('d-none');
+                        if (navPrice) navPrice.textContent = nifty.last.toFixed(2);
+                        if (navChange) {
+                            var isPos = nifty.change >= 0;
+                            navChange.textContent = (isPos ? '+' : '') + nifty.change.toFixed(2) +
+                                ' (' + (isPos ? '+' : '') + nifty.change_percent.toFixed(2) + '%)';
+                            navChange.style.color = isPos ? '#4ade80' : '#f87171';
+                        }
+                    }
                 }
             })
             .catch(function (error) {
@@ -535,7 +557,6 @@
                             activeIndex = -1;
                             suggestions.forEach(function (stock) {
                                 var suggestionItem = document.createElement('a');
-                                suggestionItem.className = 'dropdown-item';
                                 suggestionItem.href = '#';
                                 suggestionItem.innerHTML =
                                     '<strong>' + stock.symbol + '</strong> - ' + stock.name;
@@ -573,7 +594,7 @@
         });
 
         searchInput.addEventListener('keydown', function (e) {
-            var items = suggestionsBox.querySelectorAll('.dropdown-item');
+            var items = suggestionsBox.querySelectorAll('a');
             if (items.length === 0) return;
 
             if (e.key === 'ArrowDown') {

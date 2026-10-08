@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Target Tracker - NSE Data Viewer</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.1/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='site.css') }}?v=9" rel="stylesheet">
+</head>
+
+<body>
+    <!-- ── Top bar ── -->
+    <nav class="navbar app-navbar sticky-top">
+        <div class="app-container">
+            <div class="nav-group">
+                <a class="navbar-brand" href="/">
+                    <i class="bi bi-graph-up-arrow"></i>
+                    <span>NSE Data Viewer</span>
+                    <span class="live-badge">LIVE</span>
+                </a>
+            </div>
+            <ul class="nav nav-pills">
+                <li class="nav-item">
+                    <a class="nav-link" href="/">
+                        <i class="bi bi-house-door"></i><span>Home</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link active" href="/target">
+                        <i class="bi bi-bullseye"></i><span>Target</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="/brokerage-calculator">
+                        <i class="bi bi-calculator"></i><span>Brokerage</span>
+                    </a>
+                </li>
+            </ul>
+        </div>
+    </nav>
+
+    <div class="app-container py-3">
+
+        <form method="POST" id="targetForm" class="target-form">
+
+            <!-- ── Settings ── -->
+            <div class="section-card mb-3">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-bullseye me-2"></i>Target Tracker</h5>
+                </div>
+                <div class="card-body p-3">
+                    {% if error %}
+                    <div class="alert alert-danger py-2 px-3 small rounded-3 mb-3">
+                        <i class="bi bi-exclamation-triangle-fill me-1"></i>{{ error }}
+                    </div>
+                    {% endif %}
+                    <div class="alert alert-danger py-2 px-3 small rounded-3 mb-3 d-none" id="jsError">
+                        <i class="bi bi-exclamation-triangle-fill me-1"></i><span></span>
+                    </div>
+                    <div class="row g-2 align-items-end">
+                        <div class="col-6 col-xl-3">
+                            <label class="form-label small fw-semibold text-muted mb-1" for="capital">Starting Capital (₹)</label>
+                            <input type="number" class="form-control form-control-sm" id="capital" name="capital"
+                                min="1" step="1" required value="{{ form['capital'] }}">
+                        </div>
+                        <div class="col-6 col-xl-3">
+                            <label class="form-label small fw-semibold text-muted mb-1" for="targetPct">Target Profit % per day</label>
+                            <input type="number" class="form-control form-control-sm" id="targetPct" name="target_pct"
+                                min="0" max="100" step="0.01" required value="{{ form['target_pct'] }}">
+                        </div>
+                        <div class="col-6 col-xl-3">
+                            <label class="form-label small fw-semibold text-muted mb-1" for="startDate">Start Date</label>
+                            <input type="date" class="form-control form-control-sm" id="startDate" name="start_date"
+                                required value="{{ form['start_date'] }}">
+                        </div>
+                        <div class="col-6 col-xl-3">
+                            <label class="form-label small fw-semibold text-muted mb-1" for="days">Days</label>
+                            <input type="number" class="form-control form-control-sm" id="days" name="days"
+                                min="1" max="1000" step="1" required value="{{ form['days'] }}">
+                        </div>
+                        <div class="col-auto d-flex gap-2 mt-2">
+                            <button type="submit" class="btn btn-search btn-sm px-3">
+                                <i class="bi bi-calculator me-1"></i>Calculate
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary btn-sm" id="resetBtn">
+                                <i class="bi bi-arrow-counterclockwise me-1"></i>Reset
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {% if rows %}
+            <!-- ── Summary ── -->
+            <div class="row g-2 mb-3">
+                <div class="col-6 col-lg-3">
+                    <div class="stat-tile">
+                        <small>Target Balance</small>
+                        <h5 id="sumTargetClose">₹{{ summary.target_close|inr }}</h5>
+                        <small class="stat-sub text-muted" id="sumTargetSub">Day {{ summary.days }} · profit ₹{{ summary.target_profit_total|inr }}</small>
+                    </div>
+                </div>
+                <div class="col-6 col-lg-3">
+                    <div class="stat-tile">
+                        <small>Today's Target</small>
+                        <h5 id="sumTodayTarget">₹{{ summary.next_today_target|inr }}</h5>
+                        <small class="stat-sub text-muted" id="sumTodaySub">{% if summary.all_tracked %}All {{ summary.trading_days }} days tracked{% else %}Day {{ summary.next_day }} needed{% endif %}</small>
+                    </div>
+                </div>
+                <div class="col-6 col-lg-3">
+                    <div class="stat-tile">
+                        <small>Net Profit</small>
+                        <h5 id="sumNet">{% if summary.net_pnl is not none %}₹{{ summary.net_pnl|inr }}{% else %}—{% endif %}</h5>
+                        <small class="stat-sub text-muted" id="sumNetSub">{% if summary.net_target_at_entry is not none %}Target ₹{{ summary.net_target_at_entry|inr }}{% else %}Enter daily P/L{% endif %}</small>
+                    </div>
+                </div>
+                <div class="col-6 col-lg-3">
+                    <div class="stat-tile">
+                        <small>Difference</small>
+                        <h5 id="sumDiff">{% if summary.difference is not none %}₹{{ summary.difference|inr }}{% else %}—{% endif %}</h5>
+                        <small class="stat-sub text-muted" id="sumDiffSub">{% if summary.entry_day %}vs target at day {{ summary.entry_day }}{% else %}Behind / ahead appears here{% endif %}</small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── Milestones ── -->
+            <div class="section-card mb-3">
+                <div class="card-body py-2 px-3 d-flex flex-wrap align-items-center gap-2">
+                    <span class="section-heading mb-0"><i class="bi bi-signpost-split"></i>Dream Milestones</span>
+                    <div class="d-flex flex-wrap gap-2" id="milestones">
+                        {% for m in summary.milestones %}
+                        <span class="ms-chip">Day {{ m.day }} <b>₹{{ m.balance|inr }}</b></span>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── Day-by-day table ── -->
+            <div class="section-card">
+                <div class="target-scroll">
+                    <table class="table data-table target-table mb-0 align-middle">
+                        <thead>
+                            <tr class="group-row">
+                                <th colspan="6" class="grp-target">TARGET DATA</th>
+                                <th colspan="5" class="grp-actual">ACHIEVEMENT DATA</th>
+                                <th colspan="1" class="grp-cal">CAL</th>
+                            </tr>
+                            <tr>
+                                <th>Day</th>
+                                <th>Date</th>
+                                <th class="text-end">Investment (₹)</th>
+                                <th class="text-end">Target %</th>
+                                <th class="text-end">Profit/Day (₹)</th>
+                                <th class="text-end">Closing Balance (₹)</th>
+                                <th class="text-end">Today Target (₹)</th>
+                                <th class="text-end">Today P/L (₹)</th>
+                                <th class="text-end">Net P/L (₹)</th>
+                                <th class="text-end">Net Target (₹)</th>
+                                <th class="text-end">Difference (₹)</th>
+                                <th class="text-center">Holiday</th>
+                            </tr>
+                        </thead>
+                        <tbody id="targetBody">
+                            {% for r in rows %}
+                            <tr{% if r.holiday %} class="holiday"{% elif r.pnl is not none %} class="has-entry"{% endif %}>
+                                <td class="fw-semibold">day{{ r.day }}</td>
+                                <td class="text-muted">{{ r.date }}</td>
+                                <td class="text-end" data-f="tInv">{{ r.t_invest|inr }}</td>
+                                <td class="text-end" data-f="tPct">{{ r.t_pct_text }}</td>
+                                <td class="text-end" data-f="tProfit">{{ r.t_profit|inr }}</td>
+                                <td class="text-end fw-semibold" data-f="tClose">{{ r.t_close|inr }}</td>
+                                <td class="text-end" data-f="todayTarget">{{ r.today_target|inr }}</td>
+                                <td class="text-end">
+                                    <input type="number" step="0.01" inputmode="decimal"
+                                        class="pnl-input{% if pnl_values[loop.index0] %} filled{% endif %}"
+                                        data-day="{{ loop.index0 }}" name="pnl"
+                                        value="{{ pnl_values[loop.index0] }}"
+                                        {% if r.holiday %}disabled{% endif %}
+                                        aria-label="Profit or loss on day {{ r.day }}">
+                                </td>
+                                <td class="text-end" data-f="netPnl">{{ r.net_pnl|inr }}</td>
+                                <td class="text-end" data-f="netTarget">{{ r.t_net|inr }}</td>
+                                <td class="text-end fw-semibold" data-f="diff">{{ r.diff|inr }}</td>
+                                <td class="text-center">
+                                    <input type="checkbox" class="hol-check" data-day="{{ loop.index0 }}"
+                                        {% if r.holiday %}checked{% endif %}{% if r.weekend %} disabled{% endif %}
+                                        aria-label="Holiday on {{ r.date }}">
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            {% endif %}
+        </form>
+
+        <footer class="text-center mt-3">
+            <i class="bi bi-info-circle me-1"></i>Plan mirrors your Dream Project target sheet. Not investment advice.
+        </footer>
+    </div>
+
+    {% if rows %}
+    <script>
+    (function () {
+        var body = document.getElementById('targetBody');
+        if (!body) return;
+
+        var els = {
+            form: document.getElementById('targetForm'),
+            capital: document.getElementById('capital'),
+            pct: document.getElementById('targetPct'),
+            start: document.getElementById('startDate'),
+            days: document.getElementById('days'),
+            error: document.getElementById('jsError'),
+            milestones: document.getElementById('milestones'),
+            sumTargetClose: document.getElementById('sumTargetClose'),
+            sumTargetSub: document.getElementById('sumTargetSub'),
+            sumTodayTarget: document.getElementById('sumTodayTarget'),
+            sumTodaySub: document.getElementById('sumTodaySub'),
+            sumNet: document.getElementById('sumNet'),
+            sumNetSub: document.getElementById('sumNetSub'),
+            sumDiff: document.getElementById('sumDiff'),
+            sumDiffSub: document.getElementById('sumDiffSub')
+        };
+
+        var state = {
+            capital: 0, pct: 0, startDate: '', days: 0, pnls: [],
+            holidays: [{% for h in holidays %}'{{ h }}'{% if not loop.last %}, {% endif %}{% endfor %}]
+        };
+        var rowCache = [];
+
+        // ---------- helpers ----------
+        function inr(n) {
+            if (n === null || n === undefined || isNaN(n)) return '—';
+            return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+        function pad(n) { return n < 10 ? '0' + n : '' + n; }
+        function parseISO(s) {
+            var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || '');
+            return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null;
+        }
+        function todayISO() {
+            var d = new Date();
+            return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+        }
+        function fmtDate(d) {
+            return pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear();
+        }
+        function isoOf(d) {
+            return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+        }
+        function addDays(d, n) {
+            var x = new Date(d.getTime());
+            x.setDate(x.getDate() + n);
+            return x;
+        }
+        function pctText(p) { return String(+p.toFixed(6)) + '%'; }
+        function showError(msg) {
+            els.error.querySelector('span').textContent = msg;
+            els.error.classList.remove('d-none');
+        }
+        function hideError() { els.error.classList.add('d-none'); }
+
+        // ---------- settings ----------
+        function readSettings() {
+            var cap = parseFloat(els.capital.value);
+            var pct = parseFloat(els.pct.value);
+            var days = parseInt(els.days.value, 10);
+            var date = parseISO(els.start.value);
+            var msg = '';
+            if (isNaN(cap) || cap <= 0) msg = 'Starting capital must be greater than 0.';
+            else if (isNaN(pct) || pct < 0 || pct > 100) msg = 'Target % must be between 0 and 100.';
+            else if (isNaN(days) || days < 1 || days > 1000) msg = 'Days must be between 1 and 1000.';
+            else if (!date) msg = 'Start date must be a valid date.';
+            if (msg) { showError(msg); return null; }
+            hideError();
+            return { capital: cap, pct: pct, days: days, startDate: els.start.value };
+        }
+        function apply(s) {
+            state.capital = s.capital;
+            state.pct = s.pct;
+            state.days = s.days;
+            state.startDate = s.startDate;
+        }
+
+        // ---------- calculation (mirrors compute_target_plan in app.py) ----------
+        function calc() {
+            var rate = state.pct / 100;
+            var start = parseISO(state.startDate);
+            var hol = {};
+            state.holidays.forEach(function (d) { hol[d] = true; });
+            var rows = [];
+            var tInv = state.capital;
+            var netTarget = 0;
+            var netPnl = 0;
+            var lastDiff = 0;
+
+            for (var i = 0; i < state.days; i++) {
+                var d = addDays(start, i);
+                var dow = d.getDay();
+                var iso = isoOf(d);
+                var weekend = dow === 0 || dow === 6;
+                var isHol = weekend || !!hol[iso];
+
+                if (isHol) {
+                    rows.push({
+                        day: i + 1, date: fmtDate(d), iso: iso,
+                        tInv: tInv, tProfit: null, tClose: tInv,
+                        todayTarget: null, pnl: null, netPnl: null,
+                        netTarget: netTarget, diff: null,
+                        entered: false, holiday: true, weekend: weekend
+                    });
+                    continue;
+                }
+
+                var tProfit = tInv * rate;
+                var tClose = tInv + tProfit;
+                netTarget += tProfit;
+
+                var todayTarget = tProfit - lastDiff;
+                var e = state.pnls[i];
+                var has = e !== null && e !== undefined && !isNaN(e);
+                var pnl = null, rowNet = null, diff = null;
+                if (has) {
+                    netPnl += e;
+                    rowNet = netPnl;
+                    diff = rowNet - netTarget;
+                    lastDiff = diff;
+                }
+
+                rows.push({
+                    day: i + 1, date: fmtDate(d), iso: iso,
+                    tInv: tInv, tProfit: tProfit, tClose: tClose,
+                    todayTarget: todayTarget,
+                    pnl: has ? e : null,
+                    netPnl: rowNet,
+                    netTarget: netTarget,
+                    diff: diff,
+                    entered: has, holiday: false, weekend: weekend
+                });
+                tInv = tClose;
+            }
+            return rows;
+        }
+
+        // ---------- rendering ----------
+        function renderAll() {
+            var rows = calc();
+            var html = '';
+            for (var i = 0; i < rows.length; i++) {
+                var r = rows[i];
+                var e = state.pnls[i];
+                var val = (e === null || e === undefined || isNaN(e)) ? '' : e;
+                html += '<tr' + (r.holiday ? ' class="holiday"' : r.entered ? ' class="has-entry"' : '') + '>' +
+                    '<td class="fw-semibold">day' + r.day + '</td>' +
+                    '<td class="text-muted">' + r.date + '</td>' +
+                    '<td class="text-end" data-f="tInv">' + inr(r.tInv) + '</td>' +
+                    '<td class="text-end" data-f="tPct">' + pctText(state.pct) + '</td>' +
+                    '<td class="text-end" data-f="tProfit">' + inr(r.tProfit) + '</td>' +
+                    '<td class="text-end fw-semibold" data-f="tClose">' + inr(r.tClose) + '</td>' +
+                    '<td class="text-end" data-f="todayTarget">' + inr(r.todayTarget) + '</td>' +
+                    '<td class="text-end"><input type="number" step="0.01" inputmode="decimal" ' +
+                        'class="pnl-input' + (r.entered ? ' filled' : '') + '" data-day="' + i + '" ' +
+                        'value="' + val + '"' + (r.holiday ? ' disabled' : '') +
+                        ' aria-label="Profit or loss on day ' + r.day + '"></td>' +
+                    '<td class="text-end" data-f="netPnl">' + inr(r.netPnl) + '</td>' +
+                    '<td class="text-end" data-f="netTarget">' + inr(r.netTarget) + '</td>' +
+                    '<td class="text-end fw-semibold" data-f="diff">' + inr(r.diff) + '</td>' +
+                    '<td class="text-center"><input type="checkbox" class="hol-check" data-day="' + i + '"' +
+                        (r.holiday ? ' checked' : '') + (r.weekend ? ' disabled' : '') +
+                        ' aria-label="Holiday on ' + r.date + '"></td>' +
+                    '</tr>';
+            }
+            body.innerHTML = html;
+            cacheRows();
+            paint(rows);
+        }
+
+        function cacheRows() {
+            rowCache = [];
+            var trs = body.rows;
+            for (var i = 0; i < trs.length; i++) {
+                var cells = {};
+                var tds = trs[i].children;
+                for (var j = 0; j < tds.length; j++) {
+                    var f = tds[j].getAttribute('data-f');
+                    if (f) cells[f] = tds[j];
+                }
+                rowCache.push({
+                    tr: trs[i], cells: cells,
+                    input: trs[i].querySelector('.pnl-input'),
+                    hol: trs[i].querySelector('.hol-check')
+                });
+            }
+        }
+
+        function sign(td, v) {
+            td.textContent = inr(v);
+            td.classList.remove('green-text', 'red-text');
+            if (v !== null && v !== undefined && !isNaN(v)) {
+                if (v > 0) td.classList.add('green-text');
+                else if (v < 0) td.classList.add('red-text');
+            }
+        }
+
+        function paint(rows) {
+            for (var i = 0; i < rows.length && i < rowCache.length; i++) {
+                var r = rows[i];
+                var rc = rowCache[i];
+                rc.cells.tInv.textContent = inr(r.tInv);
+                rc.cells.tPct.textContent = pctText(state.pct);
+                rc.cells.tProfit.textContent = inr(r.tProfit);
+                rc.cells.tClose.textContent = inr(r.tClose);
+                rc.cells.todayTarget.textContent = inr(r.todayTarget);
+                sign(rc.cells.netPnl, r.netPnl);
+                rc.cells.netTarget.textContent = inr(r.netTarget);
+                sign(rc.cells.diff, r.diff);
+                rc.tr.classList.toggle('holiday', r.holiday);
+                rc.tr.classList.toggle('has-entry', !r.holiday && r.entered);
+                if (rc.input) {
+                    rc.input.classList.toggle('filled', r.entered);
+                    rc.input.disabled = r.holiday;
+                }
+                if (rc.hol) rc.hol.checked = r.holiday;
+            }
+            paintSummary(rows);
+            paintMilestones();
+        }
+
+        function paintSummary(rows) {
+            var last = rows[rows.length - 1];
+            els.sumTargetClose.textContent = '₹' + inr(last.tClose);
+            els.sumTargetSub.textContent = 'Day ' + last.day + ' · profit ₹' + inr(last.netTarget);
+
+            var li = -1;
+            var missing = -1;
+            var tradable = 0;
+            var lastTradable = -1;
+            for (var i = 0; i < rows.length; i++) {
+                if (rows[i].holiday) continue;
+                tradable++;
+                lastTradable = i;
+                if (rows[i].entered) li = i;
+                if (missing < 0 && !rows[i].entered) missing = i;
+            }
+            var req = missing >= 0 ? missing : (lastTradable >= 0 ? lastTradable : rows.length - 1);
+            els.sumTodayTarget.textContent = '₹' + inr(rows[req].todayTarget);
+            els.sumTodaySub.textContent = missing >= 0
+                ? 'Day ' + rows[req].day + ' needed'
+                : 'All ' + tradable + ' days tracked';
+
+            if (li < 0) {
+                els.sumNet.textContent = '—';
+                els.sumNetSub.textContent = 'Enter daily P/L';
+                els.sumDiff.textContent = '—';
+                els.sumDiffSub.textContent = 'Behind / ahead appears here';
+                els.sumDiff.classList.remove('green-text', 'red-text');
+                return;
+            }
+
+            var r = rows[li];
+            var pctOf = r.netTarget > 0 ? (r.netPnl / r.netTarget) * 100 : null;
+            els.sumNet.textContent = '₹' + inr(r.netPnl);
+            els.sumNetSub.textContent = 'Target ₹' + inr(r.netTarget) +
+                (pctOf === null ? '' : ' · ' + pctOf.toFixed(1) + '%');
+            els.sumDiff.textContent = (r.diff > 0 ? '+' : '') + '₹' + inr(r.diff);
+            els.sumDiff.classList.remove('green-text', 'red-text');
+            if (r.diff > 0) els.sumDiff.classList.add('green-text');
+            else if (r.diff < 0) els.sumDiff.classList.add('red-text');
+            els.sumDiffSub.textContent = 'vs target at day ' + r.day;
+        }
+
+        function paintMilestones() {
+            var html = '';
+            [30, 100, 365, 1000].forEach(function (n) {
+                var bal = state.capital * Math.pow(1 + state.pct / 100, n);
+                html += '<span class="ms-chip">Day ' + n + ' <b>₹' + inr(bal) + '</b></span>';
+            });
+            els.milestones.innerHTML = html;
+        }
+
+        // ---------- persistence (SQLite on the server) ----------
+        var saveTimer = null;
+        function persist() {
+            if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+            fetch('/target/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    capital: state.capital,
+                    target_pct: state.pct,
+                    start_date: state.startDate,
+                    days: state.days,
+                    pnls: state.pnls,
+                    holidays: state.holidays
+                })
+            }).catch(function () { /* keep working locally if the server is away */ });
+        }
+        function scheduleSave() {
+            if (saveTimer) clearTimeout(saveTimer);
+            saveTimer = setTimeout(persist, 500);
+        }
+        function readPnlsFromDom() {
+            state.pnls = Array.prototype.map.call(
+                body.querySelectorAll('.pnl-input'),
+                function (el) {
+                    var v = parseFloat(el.value);
+                    return el.value.trim() === '' || isNaN(v) ? null : v;
+                }
+            );
+        }
+
+        // ---------- events ----------
+        function update() {
+            var s = readSettings();
+            if (!s) return;
+            apply(s);
+            paint(calc());
+            scheduleSave();
+        }
+
+        ['capital', 'targetPct'].forEach(function (id) {
+            document.getElementById(id).addEventListener('input', update);
+        });
+        ['startDate', 'days'].forEach(function (id) {
+            document.getElementById(id).addEventListener('change', function () {
+                var s = readSettings();
+                if (!s) return;
+                apply(s);
+                renderAll();
+                scheduleSave();
+            });
+        });
+
+        body.addEventListener('input', function (e) {
+            if (!e.target.classList.contains('pnl-input')) return;
+            var i = parseInt(e.target.getAttribute('data-day'), 10);
+            var v = parseFloat(e.target.value);
+            state.pnls[i] = (e.target.value.trim() === '' || isNaN(v)) ? null : v;
+            paint(calc());
+            scheduleSave();
+        });
+
+        body.addEventListener('change', function (e) {
+            if (!e.target.classList.contains('hol-check')) return;
+            var i = parseInt(e.target.getAttribute('data-day'), 10);
+            var rows = calc();
+            if (!rows[i]) return;
+            var iso = rows[i].iso;
+            var at = state.holidays.indexOf(iso);
+            if (e.target.checked && at < 0) state.holidays.push(iso);
+            if (!e.target.checked && at >= 0) state.holidays.splice(at, 1);
+            renderAll();
+            scheduleSave();
+        });
+
+        els.form.addEventListener('submit', function (e) {
+            var s = readSettings();
+            if (!s) return;              // invalid -> let the server report it
+            e.preventDefault();
+            apply(s);
+            renderAll();
+            persist();
+        });
+
+        document.getElementById('resetBtn').addEventListener('click', function () {
+            els.capital.value = '10000';
+            els.pct.value = '1';
+            els.start.value = todayISO();
+            els.days.value = '100';
+            state.pnls = [];
+            state.holidays = [];
+            var s = readSettings();
+            if (!s) return;
+            apply(s);
+            renderAll();
+            persist();
+        });
+
+        // ---------- init (state comes from the server-rendered page) ----------
+        readPnlsFromDom();
+        var initial = readSettings();
+        if (initial) {
+            apply(initial);
+            renderAll();
+        }
+    })();
+    </script>
+    {% endif %}
+</body>
+
+</html>

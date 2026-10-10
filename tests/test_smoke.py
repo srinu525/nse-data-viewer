@@ -92,8 +92,8 @@ def fake_live():
 def fake_indices():
     return {
         "data": [
-            {"indexSymbol": "NIFTY 50", "last": 25000, "previousClose": 24900},
-            {"indexSymbol": "NIFTY BANK", "last": 53100, "previousClose": 53000},
+            {"indexSymbol": "NIFTY 50", "key": "BROAD MARKET INDICES", "last": 25000, "previousClose": 24900},
+            {"indexSymbol": "NIFTY BANK", "key": "SECTORAL INDICES", "last": 53100, "previousClose": 53000},
         ]
     }
 
@@ -111,6 +111,8 @@ def stub_fetcher(url, **kwargs):
         return fake_indices()
     if "GetQuoteApi" in url and "getSymbolData" in url:
         return fake_quote(url.split("symbol=")[1].split("&")[0].upper())
+    if "GetQuoteApi" in url and "getIndexList" in url:
+        return ["NIFTY 50", "NIFTY IT", "IT - Software"]
     if "GetQuoteApi" in url and "getHistoricalTradeData" in url:
         return fake_historical()
     return None
@@ -228,7 +230,23 @@ class NseAppTest(unittest.TestCase):
         data = response.get_json()
         self.assertEqual(len(data), 2)
         self.assertEqual(data[0]["symbol"], "NIFTY 50")
+        self.assertEqual(data[0]["category"], "BROAD MARKET INDICES")
         self.assertAlmostEqual(data[0]["change"], 100)
+
+    def test_get_symbol_indices(self):
+        response = self.client.get("/get_symbol_indices?symbol=TCS")
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data["symbol"], "TCS")
+        self.assertEqual(data["sectorIndex"], "IT - Software")
+        self.assertIn("NIFTY 50", data["indices"])
+        self.assertIn("IT - Software", data["indices"])
+        self.assertIn("max-age=", response.headers.get("Cache-Control", ""))
+
+    def test_get_symbol_indices_invalid(self):
+        response = self.client.get("/get_symbol_indices?symbol=BAD!SYM")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("error", response.get_json())
 
     def test_search_exact_match_first(self):
         response = self.client.get("/search_stocks?query=reliance")

@@ -40,6 +40,7 @@ CACHE_TTL_HEADER = {
     "/get_historical": config.TTL_HISTORICAL,
     "/get_live_data": config.TTL_LIVE_CHART,
     "/get_indices_data": config.TTL_INDICES,
+    "/get_symbol_indices": config.TTL_INDEX_LIST,
     "/search_stocks": 3600,
     "/get_peers": config.TTL_PEERS,
 }
@@ -145,7 +146,13 @@ class NSEBrowserSimulator:
                 with self.http_lock:
                     self.session.headers["User-Agent"] = random.choice(self.user_agents)
                     response = self.session.get(url, timeout=20)
-                    data = response.json() if response.status_code == 200 else None
+                    data = None
+                    if response.status_code == 200:
+                        try:
+                            data = response.json()
+                        except ValueError as exc:
+                            logger.warning("Non-JSON NSE response for %s: %s", url, exc)
+                            return None
 
                 if response.status_code == 200:
                     with self.cache_lock:
@@ -195,10 +202,43 @@ def next_api_quote(symbol):
         functionName="getSymbolData", marketType="N", series="EQ", symbol=symbol.upper()
     ))
     data = nse_fetcher.fetch_nse_data(url, cache_ttl=config.TTL_QUOTE)
-    if not data or not isinstance(data, dict):
+    if not isinstance(data, dict):
         return None
     resp = data.get("equityResponse") or []
-    return resp[0] if resp else None
+    if isinstance(resp, dict):
+        return resp
+    if isinstance(resp, list):
+        return resp[0] if resp else None
+    return None
+
+
+def next_api_index_list(symbol):
+    """Return the NSE indices a symbol is a constituent of.
+
+    NextApi's ``getIndexList`` answers with a flat list of index names; missing
+    or malformed responses degrade to an empty list so the UI can fall back to
+    the sector index from the quote.
+    """
+    from urllib.parse import urlencode
+    url = config.NEXT_API_URL + "?" + urlencode(dict(
+        functionName="getIndexList", symbol=symbol.upper()
+    ))
+    data = nse_fetcher.fetch_nse_data(url, cache_ttl=config.TTL_INDEX_LIST)
+    payload = data
+    if isinstance(data, dict):
+        payload = data.get("indexList") or data.get("data") or []
+    if not isinstance(payload, list):
+        return []
+    names = []
+    for entry in payload:
+        if isinstance(entry, str):
+            names.append(entry)
+        elif isinstance(entry, dict):
+            name = entry.get("indexSymbol") or entry.get("index") or entry.get("symbol")
+            if name:
+                names.append(name)
+    return names
+
 
 
 def next_api_historical(symbol, from_date, to_date):
@@ -224,9 +264,16 @@ def next_api_historical(symbol, from_date, to_date):
             toDate=window_to.strftime("%d-%m-%Y"),
         ))
         data = nse_fetcher.fetch_nse_data(url, cache_ttl=config.TTL_HISTORICAL)
-        if isinstance(data, list):
-            for entry in data:
-                merged[entry.get("mtimestamp")] = entry
+        payload = data
+        if isinstance(data, dict):
+            payload = data.get("data") or data.get("result") or []
+        if isinstance(payload, list):
+            for entry in payload:
+                if not isinstance(entry, dict):
+                    continue
+                ts = entry.get("mtimestamp")
+                if ts:
+                    merged[ts] = entry
         month_start = month_end + timedelta(days=1)
 
     return sorted(merged.values(), key=lambda e: datetime.strptime(e["mtimestamp"], "%d-%b-%Y"), reverse=True) or None
@@ -308,6 +355,12 @@ def map_next_quote_to_legacy(q):
 # time (a 09:15 IST print arrives as 09:15 UTC). Format in UTC on purpose -
 # adding the +05:30 offset would push every label five and a half hours ahead.
 UTC = timezone.utc
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def today_ist():
+    """The current trading-day (market) date as an ISO string, in IST."""
+    return datetime.now(IST).strftime("%Y-%m-%d")
 
 
 def convert_timestamp(timestamp_ms):
@@ -524,6 +577,7 @@ def get_indices_data():
                 indices.append(
                     {
                         "symbol": item.get("indexSymbol"),
+                        "category": item.get("key"),
                         "last": current_value,
                         "change": change,
                         "change_percent": change_percent,
@@ -533,6 +587,48 @@ def get_indices_data():
     except Exception as e:
         logger.exception("Error fetching indices")
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/get_symbol_indices")
+def get_symbol_indices():
+    """Indices related to a symbol, for the LTP card.
+
+    Combines the symbol's index membership (NextApi getIndexList) with the
+    sector index reported by the quote. The client joins these names against
+    the live /get_indices_data feed to show values next to the LTP.
+    """
+    symbol = request.args.get("symbol", "").strip().upper()
+
+    if not is_valid_symbol(symbol):
+        return jsonify({"error": "Invalid symbol."}), 400
+
+    sector_index = None
+    industry = None
+    try:
+        quote_response = next_api_quote(symbol)
+        if quote_response:
+            legacy = map_next_quote_to_legacy(quote_response)
+            sector_index = legacy["metadata"].get("pdSectorInd")
+            industry = legacy["info"].get("industry")
+    except Exception as e:
+        logger.warning("Error fetching sector info for %s: %s", symbol, e)
+
+    try:
+        indices = next_api_index_list(symbol)
+    except Exception as e:
+        logger.warning("Error fetching index list for %s: %s", symbol, e)
+        indices = []
+
+    if sector_index and sector_index not in indices:
+        indices.insert(0, sector_index)
+
+    return jsonify({
+        "symbol": symbol,
+        "sectorIndex": sector_index,
+        "industry": industry,
+        "indices": indices,
+    })
+
 
 
 @app.route('/get_stock_data')
@@ -1221,6 +1317,194 @@ def target_save():
     save_target_state(values, pnls[:values['days']])
     if hol is not None:
         save_holidays(hol)
+    return jsonify(ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Daily trade log
+# ---------------------------------------------------------------------------
+#
+# Each row is one completed transaction: a stock bought and sold on one day of
+# the Target tracker. The trades for a date feed that day's Today P/L column:
+# P/L per trade = (sell price - buy price) x quantity - all charges, and the
+# day's total is the sum of every trade booked for that date.
+
+TRADE_TYPES = ('intraday', 'delivery')
+
+
+def _valid_iso_date(value):
+    try:
+        datetime.strptime(value, '%Y-%m-%d')
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def init_trades_db():
+    """Create the trades table if it does not exist yet."""
+    with _target_conn() as conn:
+        conn.execute('''CREATE TABLE IF NOT EXISTS trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT NOT NULL,
+            trade_type TEXT NOT NULL,
+            quantity INTEGER NOT NULL DEFAULT 1,
+            buy_price REAL NOT NULL,
+            charges REAL NOT NULL DEFAULT 0,
+            sell_price REAL NOT NULL,
+            sell_charges REAL NOT NULL DEFAULT 0,
+            trade_date TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )''')
+        cols = {row['name'] for row in conn.execute('PRAGMA table_info(trades)')}
+        if 'quantity' not in cols:
+            conn.execute(
+                'ALTER TABLE trades ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1')
+
+
+def trade_pnl(trade):
+    """Net profit/loss of one trade: per-share spread times quantity, less
+    the total buy and sell charges booked for the trade."""
+    qty = int(trade.get('quantity') or 1)
+    return round(
+        ((trade['sell_price'] - trade['buy_price']) * qty)
+        - (trade['charges'] + trade['sell_charges']), 2)
+
+
+def _trade_dict(row):
+    data = dict(row)
+    data['pnl'] = trade_pnl(data)
+    return data
+
+
+def trades_for_date(date):
+    """Every trade booked for an ISO date plus the day's total P/L."""
+    init_trades_db()
+    with _target_conn() as conn:
+        rows = conn.execute(
+            'SELECT * FROM trades WHERE trade_date = ? ORDER BY id', (date,)).fetchall()
+    trades = [_trade_dict(r) for r in rows]
+    return trades, round(sum(t['pnl'] for t in trades), 2)
+
+
+def _parse_trade_payload(data):
+    """Return validated trade fields or an error JSON pair."""
+    symbol = str(data.get('symbol') or '').strip().upper()
+    trade_type = str(data.get('trade_type') or '').strip().lower()
+    date = str(data.get('date') or '').strip() or today_ist()
+
+    if not is_valid_symbol(symbol):
+        return None, ('Invalid symbol.', 400)
+    if trade_type not in TRADE_TYPES:
+        return None, ('Trade type must be intraday or delivery.', 400)
+    if not _valid_iso_date(date):
+        return None, ('Date must be a valid YYYY-MM-DD date.', 400)
+
+    try:
+        quantity_f = float(data.get('quantity', 1))
+        buy_price = float(data.get('buy_price'))
+        sell_price = float(data.get('sell_price'))
+        charges = float(data.get('charges') or 0)
+        sell_charges = float(data.get('sell_charges') or 0)
+    except (TypeError, ValueError):
+        return None, ('Prices, quantity and charges must be numbers.', 400)
+
+    if not quantity_f.is_integer():
+        return None, ('Quantity must be a whole number.', 400)
+    quantity = int(quantity_f)
+    if quantity < 1:
+        return None, ('Quantity must be at least 1.', 400)
+    if min(buy_price, sell_price, charges, sell_charges) < 0:
+        return None, ('Values cannot be negative.', 400)
+    if buy_price <= 0 or sell_price <= 0:
+        return None, ('Buy price and sell price are required.', 400)
+
+    return {
+        'symbol': symbol,
+        'trade_type': trade_type,
+        'quantity': quantity,
+        'buy_price': buy_price,
+        'charges': charges,
+        'sell_price': sell_price,
+        'sell_charges': sell_charges,
+        'date': date,
+    }, None
+
+
+@app.route('/trades/add', methods=['POST'])
+def trades_add():
+    """Persist one transaction entered from the Target page's P/L modal."""
+    data = request.get_json(silent=True) or {}
+    payload, err = _parse_trade_payload(data)
+    if err:
+        return jsonify(error=err[0]), err[1]
+
+    init_trades_db()
+    with _target_conn() as conn:
+        cur = conn.execute(
+            '''INSERT INTO trades
+               (symbol, trade_type, quantity, buy_price, charges, sell_price, sell_charges, trade_date)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+            (payload['symbol'], payload['trade_type'], payload['quantity'], payload['buy_price'],
+             payload['charges'], payload['sell_price'], payload['sell_charges'], payload['date']),
+        )
+        trade_id = cur.lastrowid
+
+    trades, total_pnl = trades_for_date(payload['date'])
+    return jsonify(ok=True, id=trade_id, total_pnl=total_pnl,
+                   count=len(trades), trades=trades)
+
+
+@app.route('/trades/<int:trade_id>', methods=['PUT'])
+def trades_update(trade_id):
+    """Update one saved transaction."""
+    data = request.get_json(silent=True) or {}
+    payload, err = _parse_trade_payload(data)
+    if err:
+        return jsonify(error=err[0]), err[1]
+
+    init_trades_db()
+    with _target_conn() as conn:
+        cur = conn.execute(
+            '''UPDATE trades
+               SET symbol = ?, trade_type = ?, quantity = ?, buy_price = ?, charges = ?,
+                   sell_price = ?, sell_charges = ?, trade_date = ?
+               WHERE id = ?''',
+            (payload['symbol'], payload['trade_type'], payload['quantity'], payload['buy_price'],
+             payload['charges'], payload['sell_price'], payload['sell_charges'], payload['date'], trade_id),
+        )
+        if cur.rowcount == 0:
+            return jsonify(error='Trade not found.'), 404
+
+    row = _target_conn().execute('SELECT * FROM trades WHERE id = ?', (trade_id,)).fetchone()
+    if row is None:
+        return jsonify(error='Trade not found.'), 404
+    trades, total_pnl = trades_for_date(payload['date'])
+    return jsonify(ok=True, id=trade_id, total_pnl=total_pnl, count=len(trades), trade=_trade_dict(row), trades=trades)
+
+
+@app.route('/trades')
+def trades_list():
+    """Trades booked for a given date (YYYY-MM-DD, default today)."""
+    date = request.args.get('date', '').strip() or today_ist()
+    if not _valid_iso_date(date):
+        return jsonify(error='Date must be a valid YYYY-MM-DD date.'), 400
+    trades, total_pnl = trades_for_date(date)
+    return jsonify({
+        'date': date,
+        'count': len(trades),
+        'total_pnl': total_pnl,
+        'trades': trades,
+    })
+
+
+@app.route('/trades/<int:trade_id>', methods=['DELETE'])
+def trades_delete(trade_id):
+    """Remove a single trade row."""
+    init_trades_db()
+    with _target_conn() as conn:
+        cur = conn.execute('DELETE FROM trades WHERE id = ?', (trade_id,))
+        if cur.rowcount == 0:
+            return jsonify(error='Trade not found.'), 404
     return jsonify(ok=True)
 
 

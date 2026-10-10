@@ -228,6 +228,9 @@
 
     // ---------------- Indices Slider ----------------
     var indicesUpdateInterval = null;
+    var indicesData = [];        // latest /get_indices_data feed (live values)
+    var symbolIndices = null;    // names of indices the symbol belongs to
+    var sectorIndexName = null;  // sector index reported by the quote
 
     function scheduleIndices() {
         clearInterval(indicesUpdateInterval);
@@ -247,11 +250,13 @@
             })
             .then(function (data) {
                 if (Array.isArray(data)) {
+                    indicesData = data;
                     if ($('#indicesSlider').hasClass('slick-initialized')) {
                         updateIndicesSlider(data);
                     } else {
                         initIndicesSlider(data);
                     }
+                    renderRelatedIndices();
                     document.getElementById('indicesLastUpdated').textContent =
                         'Last updated: ' + new Date().toLocaleTimeString();
 
@@ -344,23 +349,125 @@
         });
     }
 
+    // ---------------- Related indices (LTP card) ----------------
+    var SECTOR_CATEGORY = 'SECTORAL INDICES';
+    var BROAD_CATEGORY = 'BROAD MARKET INDICES';
+
+    function escapeHtml(value) {
+        return String(value == null ? '' : value).replace(/[&<>"']/g, function (ch) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+        });
+    }
+
+    function findIndexEntry(name) {
+        if (!name || !indicesData.length) return null;
+        var target = String(name).trim().toUpperCase();
+        for (var i = 0; i < indicesData.length; i++) {
+            var symbol = String(indicesData[i].symbol || '').trim().toUpperCase();
+            if (symbol === target) return indicesData[i];
+        }
+        return null;
+    }
+
+    function indexCategoryRank(entry) {
+        var category = entry.category || '';
+        if (category === SECTOR_CATEGORY) return 0;
+        if (category === BROAD_CATEGORY) return 1;
+        if (category === 'INDICES ELIGIBLE IN DERIVATIVES') return 2;
+        if (category === 'THEMATIC INDICES') return 3;
+        return 4;
+    }
+
+    function renderRelatedIndices() {
+        var container = document.getElementById('relatedIndices');
+        if (!container || !hasSymbol) return;
+
+        var names = (symbolIndices || []).slice();
+        if (sectorIndexName && names.indexOf(sectorIndexName) === -1) {
+            names.push(sectorIndexName);
+        }
+
+        var chips = [];
+        var seen = {};
+        names.forEach(function (name) {
+            var entry = findIndexEntry(name);
+            if (!entry) return;
+            var key = String(entry.symbol).toUpperCase();
+            if (seen[key]) return;
+            seen[key] = true;
+            chips.push(entry);
+        });
+
+        if (!chips.length) {
+            if (sectorIndexName) {
+                container.innerHTML =
+                    '<span class="ltp-indices-label"><i class="bi bi-diagram-3"></i>Related Indices</span>' +
+                    '<span class="idx-chip idx-chip-sector">' +
+                    '<span class="idx-name">' + escapeHtml(sectorIndexName) + '</span></span>';
+            } else {
+                container.innerHTML = '';
+            }
+            return;
+        }
+
+        chips.sort(function (a, b) {
+            return indexCategoryRank(a) - indexCategoryRank(b);
+        });
+        chips = chips.slice(0, 12);
+
+        var html = '<span class="ltp-indices-label"><i class="bi bi-diagram-3"></i>Related Indices</span>';
+        html += chips.map(function (entry) {
+            var isSector = entry.category === SECTOR_CATEGORY;
+            var change = Number(entry.change) || 0;
+            var pChange = Number(entry.change_percent) || 0;
+            var cls = change >= 0 ? 'idx-up' : 'idx-down';
+            var value = (entry.last !== null && entry.last !== undefined && isFinite(entry.last))
+                ? Number(entry.last).toLocaleString('en-IN', { maximumFractionDigits: 2 })
+                : '-';
+            return '<span class="idx-chip' + (isSector ? ' idx-chip-sector' : '') + '">' +
+                '<span class="idx-name">' + escapeHtml(entry.symbol) + '</span>' +
+                '<span class="idx-value">' + value + '</span>' +
+                '<span class="idx-change ' + cls + '">' + (change >= 0 ? '+' : '-') +
+                Math.abs(pChange).toFixed(2) + '%</span>' +
+                '</span>';
+        }).join('');
+
+        container.innerHTML = html;
+    }
+
+    function fetchSymbolIndices() {
+        if (!hasSymbol) return;
+        fetch('/get_symbol_indices?symbol=' + encodeURIComponent(currentSymbol))
+            .then(function (response) { return response.json(); })
+            .then(function (data) {
+                if (data && !data.error) {
+                    symbolIndices = Array.isArray(data.indices) ? data.indices : [];
+                    if (data.sectorIndex) sectorIndexName = data.sectorIndex;
+                }
+                renderRelatedIndices();
+            })
+            .catch(function (error) {
+                console.error('Error fetching symbol indices:', error);
+                renderRelatedIndices();
+            });
+    }
+
     // ---------------- Stock Data Handling ----------------
     var stockUpdateInterval = null;
     var prevClosePrice = 0;
 
     function showErrorToUser(message) {
-        var tile = document.getElementById('mainPriceTile');
         var lastPriceEl = document.getElementById('lastPrice');
         var changeValueEl = document.getElementById('changeValue');
         var changePercentEl = document.getElementById('changePercent');
         var stockSymbolEl = document.getElementById('stockSymbol');
 
-        if (tile) tile.classList.add('red_box');
         if (lastPriceEl) lastPriceEl.textContent = 'N/A';
         if (changeValueEl) changeValueEl.textContent = '-';
         if (changePercentEl) changePercentEl.textContent = '(-%)';
         if (stockSymbolEl) stockSymbolEl.textContent = currentSymbol;
 
+        var tile = document.getElementById('mainPriceTile');
         var err = document.getElementById('stockError');
         if (!err && tile) {
             err = document.createElement('div');
@@ -428,15 +535,7 @@
 
         var priceChangeElement = document.getElementById('priceChange');
         if (priceChangeElement) {
-            priceChangeElement.className = isPositive ?
-                'd-flex align-items-center justify-content-end green-text' :
-                'd-flex align-items-center justify-content-end red-text';
-        }
-
-        var mainPriceTile = document.getElementById('mainPriceTile');
-        if (mainPriceTile) {
-            mainPriceTile.classList.remove('green_box', 'red_box');
-            mainPriceTile.classList.add(isPositive ? 'green_box' : 'red_box');
+            priceChangeElement.className = 'ltp-change ' + (isPositive ? 'green-text' : 'red-text');
         }
 
         dropEl('openPrice', data.priceInfo.open.toFixed(2));
@@ -455,6 +554,10 @@
         dropEl('lowerLimit', data.priceInfo.lowerCP);
         dropEl('peRatio', data.metadata.pdSectorPe || '-');
         dropEl('sectorIndex', data.metadata.pdSectorInd || '-');
+        if (data.metadata && data.metadata.pdSectorInd) {
+            sectorIndexName = data.metadata.pdSectorInd;
+        }
+        renderRelatedIndices();
         dropEl('industry', data.info.industry || '-');
         dropEl('marketLot', (data.securityInfo && data.securityInfo.marketLot) || '-');
 
@@ -475,8 +578,10 @@
 
             var pChangeEl = document.getElementById('preOpenChange');
             var pPerEl = document.getElementById('preOpenPerChange');
-            pChangeEl.className = isPreOpenPositive ? 'mb-0 green-text' : 'mb-0 red-text';
-            pPerEl.className = isPreOpenPositive ? 'mb-0 green-text' : 'mb-0 red-text';
+            pChangeEl.classList.toggle('green-text', isPreOpenPositive);
+            pChangeEl.classList.toggle('red-text', !isPreOpenPositive);
+            pPerEl.classList.toggle('green-text', isPreOpenPositive);
+            pPerEl.classList.toggle('red-text', !isPreOpenPositive);
         }
 
         if (data.marketDeptOrderBook && data.marketDeptOrderBook.tradeInfo) {
@@ -514,6 +619,7 @@
 
     function initializeStockData() {
         fetchStockData();
+        fetchSymbolIndices();
         scheduleStock();
     }
 
@@ -892,7 +998,7 @@
             },
             plugins: {
                 ...chartConfig.options.plugins,
-                title: { display: true, text: titleText }
+                title: { display: !!titleText, text: titleText || '' }
             },
             __sessionWindow: sessionWindow,
             __fullScale: null
@@ -929,7 +1035,7 @@
         if (preOpenCanvas && !preOpenChartInstance) {
             document.getElementById('preOpenChartContainer').classList.remove('d-none');
             var preOpenPoints = toChartPoints(dynamicChart.pre_open);
-            var preOpenOptions = buildChartOptions(currentSymbol + ' Pre-Open Market Prices', SESSION_WINDOWS.preOpen);
+            var preOpenOptions = buildChartOptions(null, SESSION_WINDOWS.preOpen);
             if (preOpenPoints.length > 0) applyAxisRanges(preOpenOptions, preOpenPoints);
             preOpenChartInstance = new Chart(preOpenCanvas.getContext('2d'), {
                 ...chartConfig,
@@ -1012,14 +1118,10 @@
                 }
 
                 if (preOpenChartInstance && data.pre_open) {
-                    var preOpenLast = lastPrice(data.pre_open);
-                    var preOpenTitle = currentSymbol + ' Pre-Open Market Prices';
-                    if (preOpenLast !== null) preOpenTitle += ' | Latest: \u20B9' + preOpenLast.toFixed(2);
                     smoothUpdateChart(
                         preOpenChartInstance,
                         data.pre_open,
-                        lastPreOpenData,
-                        preOpenTitle
+                        lastPreOpenData
                     );
                     lastPreOpenData = data.pre_open;
                     document.getElementById('preOpenLastUpdated').textContent = 'Last updated: ' + now;

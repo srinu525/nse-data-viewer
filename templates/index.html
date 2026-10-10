@@ -12,7 +12,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@1.2.1/dist/chartjs-plugin-zoom.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@2.0.1/dist/chartjs-plugin-annotation.min.js"></script>
-    <link href="{{ url_for('static', filename='site.css') }}?v=9" rel="stylesheet">
+    <link href="{{ url_for('static', filename='site.css') }}?v=11" rel="stylesheet">
 </head>
 
 <body>
@@ -54,9 +54,9 @@
     <div class="app-container py-3">
 
         <!-- â”€â”€ Indices Ticker â”€â”€ -->
-        <div class="section-card mb-3">
+        <div class="section-card mb-2">
             <div class="card-body py-2 px-3">
-                <div class="d-flex justify-content-between align-items-center mb-2">
+                <div class="d-flex justify-content-between align-items-center mb-1">
                     <span class="section-heading mb-0"><i class="bi bi-bar-chart-line"></i>Market Indices</span>
                     <small class="last-updated" id="indicesLastUpdated"></small>
                 </div>
@@ -65,8 +65,8 @@
         </div>
 
         <!-- â”€â”€ Search â”€â”€ -->
-        <div class="section-card search-card mb-3">
-            <div class="card-body p-3">
+        <div class="section-card search-card mb-2">
+            <div class="card-body p-2">
                 <form method="POST" id="dataForm">
                     <input type="hidden" name="active_tab" id="activeTabInput" value="{{ active_tab or 'charts' }}">
                     <div class="row g-2 align-items-center">
@@ -138,81 +138,52 @@
                     <div class="tab-pane fade {% if (active_tab or 'charts') == 'charts' %}show active{% endif %}"
                         id="charts" role="tabpanel">
 
-                        <!-- Price hero + snapshot -->
-                        <div class="row g-3 mb-3">
-                            <div class="col-lg-5">
-                                <div id="mainPriceTile" class="h-100 rounded-3 p-3">
-                                    <div class="d-flex justify-content-between align-items-start mb-3">
-                                        <div>
-                                            <span class="badge rounded-pill mb-1" style="background:rgba(255,255,255,.15);font-size:.7rem;">{{ symbol }}</span>
-                                            <h3 class="mb-0 fw-bold" id="stockSymbol">{{ symbol }}</h3>
-                                            <p class="mb-0" id="companyName" style="color:rgba(255,255,255,.6);font-size:.85rem;">Loading {{ symbol }}...</p>
-                                        </div>
-                                        <div class="text-end">
-                                            <h2 class="mb-0 fw-bold" id="lastPrice">-</h2>
-                                            <div id="priceChange" class="d-flex align-items-center justify-content-end gap-1 mt-1">
-                                                <i id="changeIcon" class="bi"></i>
-                                                <span id="changeValue" style="font-size:.9rem;">-</span>
-                                                <span id="changePercent" style="font-size:.9rem;">(-%)</span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <small class="last-updated d-block text-end" id="stockLastUpdated"></small>
+                        <!-- Stock LTP card -->
+                        <div class="ltp-card mb-2" id="mainPriceTile">
+                            <div class="ltp-card-top">
+                                <div class="ltp-identity">
+                                    <span class="ltp-symbol" id="stockSymbol">{{ symbol }}</span>
+                                    <span class="ltp-name" id="companyName">Loading...</span>
+                                </div>
+                                <div class="ltp-price-wrap">
+                                    <span class="ltp-price" id="lastPrice">-</span>
+                                    <span class="ltp-change" id="priceChange">
+                                        <i id="changeIcon" class="bi"></i>
+                                        <span id="changeValue">-</span>
+                                        <span id="changePercent">(-%)</span>
+                                    </span>
+                                    <small class="ltp-updated" id="stockLastUpdated"></small>
                                 </div>
                             </div>
+                            <div class="ltp-indices" id="relatedIndices"></div>
+                        </div>
 
-                            <div class="col-lg-7">
-                                <div class="row g-2 h-100 row-cols-2 row-cols-md-3">
-                                    <div class="col"><div class="stat-tile"><small>Open</small><h5 id="openPrice">-</h5></div></div>
-                                    <div class="col"><div class="stat-tile"><small>Prev Close</small><h5 id="prevClose">-</h5></div></div>
-                                    <div class="col"><div class="stat-tile"><small>Day High</small><h5 id="dayHigh">-</h5></div></div>
-                                    <div class="col"><div class="stat-tile"><small>Day Low</small><h5 id="dayLow">-</h5></div></div>
-                                    <div class="col"><div class="stat-tile"><small>52W High</small><h5 id="weekHigh">-</h5></div></div>
-                                    <div class="col"><div class="stat-tile"><small>52W Low</small><h5 id="weekLow">-</h5></div></div>
-                                </div>
+                        <!-- Data tables -->
+                        <div class="row g-2 mb-2">
+                            <div class="col-12 col-md-6">
+                                <table class="info-table w-100">
+                                    <thead><tr><th colspan="4">Price Info</th></tr></thead>
+                                    <tbody>
+                                        <tr><td>Open</td><td id="openPrice">-</td><td>Prev Close</td><td id="prevClose">-</td></tr>
+                                        <tr><td>Day High</td><td id="dayHigh">-</td><td>Day Low</td><td id="dayLow">-</td></tr>
+                                        <tr><td>52W High</td><td id="weekHigh">-</td><td>52W Low</td><td id="weekLow">-</td></tr>
+                                        <tr><td>VWAP</td><td id="vwap">-</td><td>PE Ratio</td><td id="peRatio">-</td></tr>
+                                        <tr><td>Upper Limit</td><td id="upperLimit">-</td><td>Lower Limit</td><td id="lowerLimit">-</td></tr>
+                                        <tr><td>Sector Index</td><td id="sectorIndex">-</td><td>Industry</td><td id="industry">-</td></tr>
+                                    </tbody>
+                                </table>
                             </div>
-                        </div>
-
-                        <!-- Key metrics row -->
-                        <div class="row g-2 row-cols-2 row-cols-md-3 row-cols-lg-6 mb-3">
-                            <div class="col"><div class="stat-tile"><small>Upper Limit</small><h5 id="upperLimit">-</h5></div></div>
-                            <div class="col"><div class="stat-tile"><small>Lower Limit</small><h5 id="lowerLimit">-</h5></div></div>
-                            <div class="col"><div class="stat-tile"><small>VWAP</small><h5 id="vwap">-</h5></div></div>
-                            <div class="col"><div class="stat-tile"><small>PE Ratio</small><h5 id="peRatio">-</h5></div></div>
-                            <div class="col"><div class="stat-tile"><small>Sector Index</small><h5 id="sectorIndex">-</h5></div></div>
-                            <div class="col"><div class="stat-tile"><small>Industry</small><h5 id="industry">-</h5></div></div>
-                        </div>
-
-                        <!-- Trading metrics -->
-                        <div class="section-card mb-3" style="border-radius:10px;">
-                            <div class="card-body p-3">
-                                <div class="section-heading"><i class="bi bi-speedometer2"></i>Trading Metrics</div>
-                                <div class="row g-2 row-cols-2 row-cols-md-3 row-cols-lg-5">
-                                    <div class="col"><div class="stat-tile"><small>Total Volume</small><h5 id="totalTradedVolume">-</h5></div></div>
-                                    <div class="col"><div class="stat-tile"><small>Traded Value (₹ Cr)</small><h5 id="totalTradedValue">-</h5></div></div>
-                                    <div class="col"><div class="stat-tile"><small>Delivery %</small><h5 id="deliveryPercentage">-</h5></div></div>
-                                    <div class="col"><div class="stat-tile"><small>Daily Volatility</small><h5 id="dailyVolatility">-</h5></div></div>
-                                    <div class="col"><div class="stat-tile"><small>Annual Volatility</small><h5 id="annualVolatility">-</h5></div></div>
-                                    <div class="col"><div class="stat-tile"><small>Security VAR</small><h5 id="securityVar">-</h5></div></div>
-                                    <div class="col"><div class="stat-tile"><small>VAR Margin</small><h5 id="varMargin">-</h5></div></div>
-                                    <div class="col"><div class="stat-tile"><small>Extreme Loss Margin</small><h5 id="extremeLossMargin">-</h5></div></div>
-                                    <div class="col"><div class="stat-tile"><small>Applicable Margin</small><h5 id="applicableMargin">-</h5></div></div>
-                                    <div class="col"><div class="stat-tile"><small>Market Lot</small><h5 id="marketLot">-</h5></div></div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Pre-open metrics -->
-                        <div class="section-card mb-3" style="border-radius:10px;">
-                            <div class="card-body p-3">
-                                <div class="section-heading"><i class="bi bi-sunrise"></i>Pre-Open Market</div>
-                                <div class="row g-2 row-cols-2 row-cols-md-5">
-                                    <div class="col"><div class="stat-tile"><small>Total Volume</small><h5 id="preOpenVolume">-</h5></div></div>
-                                    <div class="col"><div class="stat-tile"><small>Buy Qty</small><h5 id="preOpenBuyQty">-</h5></div></div>
-                                    <div class="col"><div class="stat-tile"><small>Sell Qty</small><h5 id="preOpenSellQty">-</h5></div></div>
-                                    <div class="col"><div class="stat-tile"><small>Change</small><h5 id="preOpenChange">-</h5></div></div>
-                                    <div class="col"><div class="stat-tile"><small>% Change</small><h5 id="preOpenPerChange">-</h5></div></div>
-                                </div>
+                            <div class="col-12 col-md-6">
+                                <table class="info-table w-100">
+                                    <thead><tr><th colspan="4">Trading Metrics</th></tr></thead>
+                                    <tbody>
+                                        <tr><td>Total Volume</td><td id="totalTradedVolume">-</td><td>Traded Value (&#8377; Cr)</td><td id="totalTradedValue">-</td></tr>
+                                        <tr><td>Delivery %</td><td id="deliveryPercentage">-</td><td>Market Lot</td><td id="marketLot">-</td></tr>
+                                        <tr><td>Daily Volatility</td><td id="dailyVolatility">-</td><td>Annual Volatility</td><td id="annualVolatility">-</td></tr>
+                                        <tr><td>Security VAR</td><td id="securityVar">-</td><td>VAR Margin</td><td id="varMargin">-</td></tr>
+                                        <tr><td>Extreme Loss Margin</td><td id="extremeLossMargin">-</td><td>Applicable Margin</td><td id="applicableMargin">-</td></tr>
+                                    </tbody>
+                                </table>
                             </div>
                         </div>
 
@@ -220,17 +191,23 @@
                         <div class="chart-row">
                             <div class="chart-col mb-3 d-none" id="preOpenChartContainer">
                                 <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
-                                    <h6 class="chart-title mb-0">Pre-Open Prices</h6>
-                                    <div class="d-flex align-items-center gap-2">
-                                        <small class="last-updated" id="preOpenLastUpdated"></small>
-                                        <div class="chart-controls">
-                                            <button class="btn btn-sm btn-outline-secondary" onclick="resetZoom('preOpenChart')">Reset</button>
-                                            <button class="btn btn-sm btn-outline-secondary" onclick="showAllData('preOpenChart')">All</button>
-                                        </div>
+                                    <small class="last-updated" id="preOpenLastUpdated"></small>
+                                    <div class="chart-controls">
+                                        <button class="btn btn-sm btn-outline-secondary" onclick="resetZoom('preOpenChart')">Reset</button>
+                                        <button class="btn btn-sm btn-outline-secondary" onclick="showAllData('preOpenChart')">All</button>
                                     </div>
                                 </div>
-                                <div class="chart-container">
-                                    <canvas id="preOpenChart"></canvas>
+                                <div class="chart-container chart-stack">
+                                    <div class="pre-open-stats">
+                                        <span class="pre-open-stat"><span class="pre-open-label">Total Volume</span><b id="preOpenVolume">-</b></span>
+                                        <span class="pre-open-stat"><span class="pre-open-label">Buy Qty</span><b id="preOpenBuyQty">-</b></span>
+                                        <span class="pre-open-stat"><span class="pre-open-label">Sell Qty</span><b id="preOpenSellQty">-</b></span>
+                                        <span class="pre-open-stat"><span class="pre-open-label">Change</span><b id="preOpenChange">-</b></span>
+                                        <span class="pre-open-stat"><span class="pre-open-label">% Change</span><b id="preOpenPerChange">-</b></span>
+                                    </div>
+                                    <div class="chart-canvas-wrap">
+                                        <canvas id="preOpenChart"></canvas>
+                                    </div>
                                 </div>
                             </div>
 
@@ -323,11 +300,22 @@
                     <div class="tab-pane fade {% if active_tab == 'peers' %}show active{% endif %}"
                         id="peers" role="tabpanel">
 
-                        <div class="row g-2 mb-3">
-                            <div class="col-6 col-md-3"><div class="stat-tile p-2"><small>Industry</small><h5 id="peerIndustry">-</h5></div></div>
-                            <div class="col-6 col-md-3"><div class="stat-tile p-2"><small>Sector Index</small><h5 id="peerSectorIndex">-</h5></div></div>
-                            <div class="col-6 col-md-3"><div class="stat-tile p-2"><small>Sector PE</small><h5 id="peerSectorPe">-</h5></div></div>
-                            <div class="col-6 col-md-3"><div class="stat-tile p-2"><small>Peers Found</small><h5 id="peerCount">-</h5></div></div>
+                        <div class="row mb-2">
+                            <div class="col-12 col-md-6 col-lg-4">
+                                <table class="info-table w-100">
+                                    <thead><tr><th colspan="4">Sector Info</th></tr></thead>
+                                    <tbody>
+                                        <tr>
+                                            <td>Industry</td><td id="peerIndustry">-</td>
+                                            <td>Sector Index</td><td id="peerSectorIndex">-</td>
+                                        </tr>
+                                        <tr>
+                                            <td>Sector PE</td><td id="peerSectorPe">-</td>
+                                            <td>Peers Found</td><td id="peerCount">-</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
 
                         <div class="alert alert-info py-2 d-none" id="peersStatus">
@@ -364,7 +352,7 @@
         </footer>
     </div>
 
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/slick-carousel@1.8.1/slick/slick.min.js"></script>
     <script>

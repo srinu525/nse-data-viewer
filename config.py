@@ -22,6 +22,9 @@ TTL_INDICES = 15
 TTL_PRE_OPEN = 30
 TTL_PEERS = 300
 
+# Index constituent membership for a symbol changes rarely - cache it long.
+TTL_INDEX_LIST = 900
+
 # Peers comparison: maximum number of peer quotes fetched per request
 MAX_PEERS = 12
 

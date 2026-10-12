@@ -36,8 +36,16 @@
         return minutes >= 9 * 60 && minutes <= 15 * 60 + 30;
     }
 
-    function getPollMs(openMs, closedMs) {
-        return isMarketOpen() ? openMs : closedMs;
+    var automaticPollingPaused = !navigator.onLine;
+    var liveUpdateInterval = null;
+
+    function canAutomaticallyPoll() {
+        return !automaticPollingPaused && navigator.onLine &&
+            document.visibilityState === 'visible' && isMarketOpen();
+    }
+
+    function pauseAutomaticPolling() {
+        automaticPollingPaused = true;
     }
 
     // ---------------- Historical tab ----------------
@@ -226,7 +234,7 @@
             });
     }
 
-    // ---------------- Indices Slider ----------------
+    // ---------------- Index data ----------------
     var indicesUpdateInterval = null;
     var indicesData = [];        // latest /get_indices_data feed (live values)
     var symbolIndices = null;    // names of indices the symbol belongs to
@@ -234,11 +242,13 @@
 
     function scheduleIndices() {
         clearInterval(indicesUpdateInterval);
-        indicesUpdateInterval = setInterval(fetchIndicesData, getPollMs(15000, 60000));
+        indicesUpdateInterval = setInterval(function () {
+            if (canAutomaticallyPoll()) fetchIndicesData();
+        }, 15000);
     }
 
-    function initializeIndicesSlider() {
-        fetchIndicesData();
+    function initializeIndicesData() {
+        if (navigator.onLine) fetchIndicesData();
         scheduleIndices();
     }
 
@@ -249,16 +259,10 @@
                 return response.json();
             })
             .then(function (data) {
+                if (data && data.error) throw new Error(data.error);
                 if (Array.isArray(data)) {
                     indicesData = data;
-                    if ($('#indicesSlider').hasClass('slick-initialized')) {
-                        updateIndicesSlider(data);
-                    } else {
-                        initIndicesSlider(data);
-                    }
                     renderRelatedIndices();
-                    document.getElementById('indicesLastUpdated').textContent =
-                        'Last updated: ' + new Date().toLocaleTimeString();
 
                     // Update Nifty 50 in navbar
                     var nifty = data.find(function (d) {
@@ -281,72 +285,8 @@
             })
             .catch(function (error) {
                 console.error('Error fetching indices:', error);
-                $('#indicesSlider').html('<div class="text-muted p-2">Error loading indices data</div>');
+                pauseAutomaticPolling();
             });
-    }
-
-    function updateIndicesSlider(data) {
-        if (!data || data.length === 0) return;
-
-        $('#indicesSlider .slick-slide:not(.slick-cloned)').each(function (index) {
-            if (index < data.length) {
-                var indexData = data[index];
-                var isPositive = indexData.change >= 0;
-                var changeClass = isPositive ? 'green_box' : 'red_box';
-                var changeSign = isPositive ? '+' : '-';
-                var percentSign = isPositive ? '+' : '-';
-
-                $(this).html(
-                    '<div class="item indices_details text-start ' + changeClass + '" style="padding:10px;margin-bottom:10px">' +
-                    '<p class="symbol">' + (indexData.symbol || 'N/A') + '</p>' +
-                    '<h3 class="value">' + (indexData.last ? indexData.last.toFixed(2) : 'N/A') + '</h3>' +
-                    '<p class="chng">' +
-                    changeSign + Math.abs(indexData.change).toFixed(2) +
-                    ' (' + percentSign + Math.abs(indexData.change_percent).toFixed(2) + '%)' +
-                    '</p>' +
-                    '</div>'
-                );
-            }
-        });
-    }
-
-    function initIndicesSlider(data) {
-        var slider = $('#indicesSlider');
-        slider.empty();
-
-        data.forEach(function (index) {
-            var isPositive = index.change >= 0;
-            var changeClass = isPositive ? 'green_box' : 'red_box';
-            var changeSign = isPositive ? '+' : '-';
-            var percentSign = isPositive ? '+' : '-';
-
-            slider.append(
-                '<div>' +
-                '<div class="item indices_details text-start ' + changeClass + '" style="padding:10px;margin-bottom:10px">' +
-                '<p class="symbol">' + (index.symbol || 'N/A') + '</p>' +
-                '<h3 class="value">' + (index.last ? index.last.toFixed(2) : 'N/A') + '</h3>' +
-                '<p class="chng">' +
-                changeSign + Math.abs(index.change).toFixed(2) +
-                ' (' + percentSign + Math.abs(index.change_percent).toFixed(2) + '%)' +
-                '</p>' +
-                '</div>' +
-                '</div>'
-            );
-        });
-
-        slider.slick({
-            slidesToShow: 6,
-            slidesToScroll: 6,
-            autoplay: false,
-            arrows: true,
-            infinite: false,
-            responsive: [
-                { breakpoint: 1200, settings: { slidesToShow: 5, slidesToScroll: 5 } },
-                { breakpoint: 992, settings: { slidesToShow: 4, slidesToScroll: 4 } },
-                { breakpoint: 768, settings: { slidesToShow: 3, slidesToScroll: 3 } },
-                { breakpoint: 576, settings: { slidesToShow: 2, slidesToScroll: 2 } }
-            ]
-        });
     }
 
     // ---------------- Related indices (LTP card) ----------------
@@ -475,37 +415,34 @@
             err.className = 'alert alert-warning mt-2 mb-0 py-1 px-2 small';
             tile.closest('.card-body').appendChild(err);
         }
-        if (err) err.textContent = 'Error loading data: ' + message + '. Will retry automatically.';
+        if (err) err.textContent = 'Error loading data: ' + message + '. Automatic updates paused.';
     }
 
     function scheduleStock() {
         clearInterval(stockUpdateInterval);
-        stockUpdateInterval = setInterval(fetchStockData, getPollMs(5000, 60000));
+        stockUpdateInterval = setInterval(function () {
+            if (canAutomaticallyPoll()) fetchStockData();
+        }, 5000);
     }
 
     function fetchStockData() {
         fetch('/get_stock_data?symbol=' + encodeURIComponent(currentSymbol))
             .then(function (response) {
-                if (!response.ok) {
-                    var retryAfter = parseInt(response.headers.get('Retry-After')) || 5;
-                    console.warn('Server busy, retrying after ' + retryAfter + ' seconds');
-                    setTimeout(fetchStockData, retryAfter * 1000);
-                    throw new Error('HTTP error! status: ' + response.status);
-                }
+                if (!response.ok) throw new Error('HTTP error! status: ' + response.status);
                 return response.json();
             })
             .then(function (data) {
                 if (data.error) {
                     showErrorToUser(data.error);
-                    clearInterval(stockUpdateInterval);
-                    stockUpdateInterval = setInterval(fetchStockData, 10000);
+                    pauseAutomaticPolling();
                 } else {
                     updateStockData(data);
-                    scheduleStock();
                 }
             })
             .catch(function (error) {
                 console.error('Error fetching stock data:', error);
+                showErrorToUser(error.message);
+                pauseAutomaticPolling();
             });
     }
 
@@ -527,6 +464,11 @@
         dropEl('lastPrice', lastPrice.toFixed(2));
         dropEl('changeValue', change.toFixed(2));
         dropEl('changePercent', '(' + pChange.toFixed(2) + '%)');
+        updateWatchlistQuote(data.info.symbol || currentSymbol, {
+            last: lastPrice,
+            change: change,
+            percent: pChange
+        });
 
         var changeIcon = document.getElementById('changeIcon');
         if (changeIcon) {
@@ -618,16 +560,261 @@
     }
 
     function initializeStockData() {
-        fetchStockData();
-        fetchSymbolIndices();
+        if (navigator.onLine) {
+            fetchStockData();
+            fetchSymbolIndices();
+        }
         scheduleStock();
     }
 
     // ---------------- Search Suggestions ----------------
     var LS_KEY = 'nseLastSymbol';
+    var WATCHLIST_KEY = 'nseWatchlist';
+    var WATCHLIST_QUOTES_KEY = 'nseWatchlistQuotes';
+    var watchlistQuotes = {};
+    var latestStockQuote = null;
+
+    var watchlistUpdateInterval = null;
+    var watchlistRefreshInFlight = false;
+
+    function getWatchlistSymbols() {
+        try {
+            var stored = JSON.parse(localStorage.getItem(WATCHLIST_KEY) || '[]');
+            if (!Array.isArray(stored)) return [];
+            return stored.filter(function (symbol) {
+                return typeof symbol === 'string' && /^[A-Z0-9-]{1,20}$/.test(symbol);
+            });
+        } catch (error) {
+            return [];
+        }
+    }
+
+    function refreshWatchlistQuotes() {
+        if (watchlistRefreshInFlight) return;
+        var symbols = getWatchlistSymbols();
+        if (!symbols.length) return;
+        var toFetch = symbols.filter(function (symbol) {
+            return !(hasSymbol && symbol === currentSymbol);
+        });
+        if (!toFetch.length) return;
+
+        watchlistRefreshInFlight = true;
+        fetch('/get_watchlist_data?symbols=' + encodeURIComponent(toFetch.join(',')))
+            .then(function (response) {
+                if (!response.ok) throw new Error('HTTP error! status: ' + response.status);
+                return response.json();
+            })
+            .then(function (data) {
+                if (!data || typeof data !== 'object' || data.error) return;
+                Object.keys(data).forEach(function (symbol) {
+                    var quote = data[symbol];
+                    if (quote && Number.isFinite(Number(quote.last))) {
+                        updateWatchlistQuote(symbol, quote);
+                    }
+                });
+            })
+            .catch(function (error) {
+                console.error('Error updating watchlist quotes:', error);
+            })
+            .then(function () {
+                watchlistRefreshInFlight = false;
+            });
+    }
+
+    function scheduleWatchlistUpdates() {
+        clearInterval(watchlistUpdateInterval);
+        watchlistUpdateInterval = setInterval(function () {
+            if (canAutomaticallyPoll()) refreshWatchlistQuotes();
+        }, 5000);
+    }
+
+    function updateWatchlistQuote(symbol, quote) {
+        if (!symbol || !quote) return;
+        symbol = String(symbol).trim().toUpperCase();
+        latestStockQuote = { symbol: symbol, quote: quote };
+        watchlistQuotes[symbol] = quote;
+
+        var itemsEl = document.getElementById('watchlistItems');
+        var item = itemsEl && itemsEl.querySelector('[data-watch-symbol="' + symbol + '"]');
+        if (!item) return;
+
+        try {
+            localStorage.setItem(WATCHLIST_QUOTES_KEY, JSON.stringify(watchlistQuotes));
+        } catch (error) {
+            console.warn('Could not cache watchlist quote:', error);
+        }
+
+        var price = Number(quote.last);
+        var change = Number(quote.change);
+        var percent = Number(quote.percent);
+        item.querySelector('.watchlist-price').textContent = Number.isFinite(price)
+            ? '₹' + price.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+            : '—';
+        var changeEl = item.querySelector('.watchlist-change');
+        changeEl.textContent = Number.isFinite(change) && Number.isFinite(percent)
+            ? (change > 0 ? '+' : change < 0 ? '-' : '') +
+                '₹' + Math.abs(change).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) +
+                ' (' + (change > 0 ? '+' : '') + percent.toFixed(2) + '%)'
+            : '—';
+        changeEl.className = 'watchlist-change ' +
+            (change > 0 ? 'green-text' : change < 0 ? 'red-text' : 'text-muted');
+    }
 
     function rememberSymbol(symbol) {
         try { localStorage.setItem(LS_KEY, symbol); } catch (e) { }
+    }
+
+    function initWatchlist() {
+        var itemsEl = document.getElementById('watchlistItems');
+        var addBtn = document.getElementById('watchlistAddBtn');
+        var statusEl = document.getElementById('watchlistStatus');
+        if (!itemsEl || !addBtn) return;
+
+        function showStorageError(message) {
+            if (!statusEl) return;
+            statusEl.textContent = message;
+            statusEl.hidden = false;
+        }
+
+        function readSymbols() {
+            try {
+                var stored = JSON.parse(localStorage.getItem(WATCHLIST_KEY) || '[]');
+                if (!Array.isArray(stored)) return [];
+                return stored.filter(function (symbol) {
+                    return typeof symbol === 'string' && /^[A-Z0-9-]{1,20}$/.test(symbol);
+                });
+            } catch (error) {
+                showStorageError('Could not read the saved watchlist from this browser.');
+                return [];
+            }
+        }
+
+        try {
+            var cachedQuotes = JSON.parse(localStorage.getItem(WATCHLIST_QUOTES_KEY) || '{}');
+            if (cachedQuotes && typeof cachedQuotes === 'object' && !Array.isArray(cachedQuotes)) {
+                Object.keys(cachedQuotes).forEach(function (symbol) {
+                    var quote = cachedQuotes[symbol];
+                    if (/^[A-Z0-9-]{1,20}$/.test(symbol) && quote &&
+                        Number.isFinite(Number(quote.last)) &&
+                        Number.isFinite(Number(quote.change)) &&
+                        Number.isFinite(Number(quote.percent))) {
+                        watchlistQuotes[symbol] = quote;
+                    }
+                });
+            }
+        } catch (error) {
+            showStorageError('Could not read saved watchlist prices from this browser.');
+        }
+
+        function saveSymbols(symbols) {
+            try {
+                localStorage.setItem(WATCHLIST_KEY, JSON.stringify(symbols));
+                if (statusEl) {
+                    statusEl.textContent = '';
+                    statusEl.hidden = true;
+                }
+                return true;
+            } catch (error) {
+                showStorageError('Could not save the watchlist. Check browser storage settings.');
+                return false;
+            }
+        }
+
+        function render() {
+            var symbols = readSymbols();
+            itemsEl.replaceChildren();
+
+            if (!symbols.length) {
+                var empty = document.createElement('span');
+                empty.className = 'watchlist-empty';
+                empty.textContent = 'No saved stocks yet. Add the current stock to keep it here.';
+                itemsEl.appendChild(empty);
+            } else {
+                symbols.forEach(function (symbol) {
+                    var item = document.createElement('div');
+                    item.className = 'watchlist-item' +
+                        (symbol === currentSymbol ? ' active' : '');
+
+                    var link = document.createElement('a');
+                    link.className = 'watchlist-symbol';
+                    link.href = '/?symbol=' + encodeURIComponent(symbol);
+                    link.textContent = symbol;
+                    if (symbol === currentSymbol) link.setAttribute('aria-current', 'page');
+
+                    var quote = watchlistQuotes[symbol];
+                    var values = document.createElement('div');
+                    values.className = 'watchlist-values';
+                    var price = document.createElement('span');
+                    price.className = 'watchlist-price';
+                    price.textContent = quote && Number.isFinite(Number(quote.last))
+                        ? '₹' + Number(quote.last).toLocaleString('en-IN', {
+                            minimumFractionDigits: 2, maximumFractionDigits: 2
+                        })
+                        : '—';
+                    var change = document.createElement('span');
+                    change.className = 'watchlist-change ' +
+                        (quote && Number(quote.change) > 0 ? 'green-text' :
+                            quote && Number(quote.change) < 0 ? 'red-text' : 'text-muted');
+                    var quoteChange = quote ? Number(quote.change) : NaN;
+                    var quotePercent = quote ? Number(quote.percent) : NaN;
+                    change.textContent = Number.isFinite(quoteChange) && Number.isFinite(quotePercent)
+                        ? (quoteChange > 0 ? '+' : quoteChange < 0 ? '-' : '') +
+                            '₹' + Math.abs(quoteChange).toLocaleString('en-IN', {
+                                minimumFractionDigits: 2, maximumFractionDigits: 2
+                            }) +
+                            ' (' + (quoteChange > 0 ? '+' : '') + quotePercent.toFixed(2) + '%)'
+                        : 'Loading…';
+                    values.appendChild(price);
+                    values.appendChild(change);
+
+                    var remove = document.createElement('button');
+                    remove.type = 'button';
+                    remove.className = 'watchlist-remove';
+                    remove.dataset.symbol = symbol;
+                    remove.setAttribute('aria-label', 'Remove ' + symbol + ' from watchlist');
+                    remove.title = 'Remove ' + symbol;
+                    remove.innerHTML = '<i class="bi bi-x-lg" aria-hidden="true"></i>';
+
+                    item.appendChild(link);
+                    item.appendChild(values);
+                    item.appendChild(remove);
+                    item.dataset.watchSymbol = symbol;
+                    itemsEl.appendChild(item);
+                });
+            }
+
+            var alreadySaved = symbols.indexOf(currentSymbol) !== -1;
+            addBtn.disabled = alreadySaved;
+            addBtn.innerHTML = alreadySaved
+                ? '<i class="bi bi-check-lg me-1"></i>Added'
+                : '<i class="bi bi-plus-lg me-1"></i>Add ' + currentSymbol;
+        }
+
+        addBtn.addEventListener('click', function () {
+            var symbols = readSymbols();
+            if (symbols.indexOf(currentSymbol) !== -1) return;
+            symbols.push(currentSymbol);
+            if (saveSymbols(symbols)) {
+                render();
+                if (latestStockQuote && latestStockQuote.symbol === currentSymbol) {
+                    updateWatchlistQuote(currentSymbol, latestStockQuote.quote);
+                }
+            }
+        });
+
+        itemsEl.addEventListener('click', function (event) {
+            var remove = event.target.closest('.watchlist-remove');
+            if (!remove) return;
+            var symbols = readSymbols();
+            var index = symbols.indexOf(remove.dataset.symbol);
+            if (index < 0) return;
+            symbols.splice(index, 1);
+            if (saveSymbols(symbols)) render();
+        });
+
+        render();
+        refreshWatchlistQuotes();
+        scheduleWatchlistUpdates();
     }
 
     function submitSearch() {
@@ -1011,15 +1198,21 @@
     }
 
     function initializeCharts() {
+        if (!navigator.onLine) return;
         fetch('/get_live_data?symbol=' + encodeURIComponent(currentSymbol))
-            .then(function (response) { return response.json(); })
+            .then(function (response) {
+                if (!response.ok) throw new Error('HTTP error! status: ' + response.status);
+                return response.json();
+            })
             .then(function (data) {
+                if (data.error) throw new Error(data.error);
                 createChartsFromData(data);
                 startLiveUpdates(currentSymbol);
             })
             .catch(function (error) {
                 console.error('Error initializing charts:', error);
                 noChartData(true);
+                pauseAutomaticPolling();
             });
     }
 
@@ -1088,27 +1281,24 @@
     }
 
     function startLiveUpdates(symbol) {
-        var lastUpdateTime = 0;
-        function updateLoop() {
-            var currentTime = Date.now();
-            var interval = getPollMs(4000, 60000);
-            if (currentTime - lastUpdateTime >= interval) {
-                updateLiveData(symbol);
-                lastUpdateTime = currentTime;
-            }
-            requestAnimationFrame(updateLoop);
-        }
-        requestAnimationFrame(updateLoop);
+        if (liveUpdateInterval) clearInterval(liveUpdateInterval);
+        liveUpdateInterval = setInterval(function () {
+            if (canAutomaticallyPoll()) updateLiveData(symbol);
+        }, 4000);
     }
 
     function updateLiveData(symbol) {
         fetch('/get_live_data?symbol=' + encodeURIComponent(symbol))
-            .then(function (response) { return response.json(); })
+            .then(function (response) {
+                if (!response.ok) throw new Error('HTTP error! status: ' + response.status);
+                return response.json();
+            })
             .then(function (data) {
                 var now = new Date().toLocaleTimeString();
 
                 if (data.error) {
                     if (!preOpenChartInstance && !normalMarketChartInstance) noChartData(true);
+                    pauseAutomaticPolling();
                     return;
                 }
 
@@ -1151,7 +1341,10 @@
                     }
                 }
             })
-            .catch(function (error) { console.error('Error updating live data:', error); });
+            .catch(function (error) {
+                console.error('Error updating live data:', error);
+                pauseAutomaticPolling();
+            });
     }
 
     function smoothUpdateChart(chartInstance, newData, oldData, newTitle) {
@@ -1195,7 +1388,8 @@
         }
 
         initSearch();
-        initializeIndicesSlider();
+        initWatchlist();
+        initializeIndicesData();
 
         if (hasSymbol) {
             if (!window.location.hash) {
@@ -1238,10 +1432,30 @@
 
     // Pause heavy FPS polling when the tab is hidden, refresh on return
     document.addEventListener('visibilitychange', function () {
-        if (document.visibilityState === 'visible') {
+        if (document.visibilityState === 'visible' && canAutomaticallyPoll()) {
+            refreshWatchlistQuotes();
             if (hasSymbol) {
                 fetchStockData();
                 if (!preOpenChartInstance && !normalMarketChartInstance) initializeCharts();
+                else updateLiveData(currentSymbol);
+            }
+        }
+    });
+
+    window.addEventListener('offline', pauseAutomaticPolling);
+    window.addEventListener('online', function () {
+        automaticPollingPaused = false;
+        if (!navigator.onLine || document.visibilityState !== 'visible') return;
+        if (!isMarketOpen()) return;
+        fetchIndicesData();
+        refreshWatchlistQuotes();
+        if (hasSymbol) {
+            fetchStockData();
+            fetchSymbolIndices();
+            if (preOpenChartInstance || normalMarketChartInstance) {
+                updateLiveData(currentSymbol);
+            } else if (activeTab === 'charts') {
+                initializeCharts();
             }
         }
     });
@@ -1250,6 +1464,8 @@
     window.addEventListener('beforeunload', function () {
         if (indicesUpdateInterval) clearInterval(indicesUpdateInterval);
         if (stockUpdateInterval) clearInterval(stockUpdateInterval);
+        if (liveUpdateInterval) clearInterval(liveUpdateInterval);
+        if (watchlistUpdateInterval) clearInterval(watchlistUpdateInterval);
     });
 
     // Expose handlers used by inline onclick attributes in the template

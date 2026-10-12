@@ -1,5 +1,6 @@
 import csv
 import logging
+import math
 import os
 import random
 import re
@@ -39,10 +40,11 @@ CACHE_TTL_HEADER = {
     "/get_stock_data": config.TTL_QUOTE,
     "/get_historical": config.TTL_HISTORICAL,
     "/get_live_data": config.TTL_LIVE_CHART,
-    "/get_indices_data": config.TTL_INDICES,
-    "/get_symbol_indices": config.TTL_INDEX_LIST,
+"/get_indices_data": config.TTL_INDICES,
+"/get_symbol_indices": config.TTL_INDEX_LIST,
     "/search_stocks": 3600,
     "/get_peers": config.TTL_PEERS,
+    "/get_watchlist_data": config.TTL_QUOTE,
 }
 
 
@@ -69,12 +71,16 @@ def is_valid_symbol(symbol):
 
 class NSEBrowserSimulator:
     def __init__(self):
-        self.session = None
+        self.user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+        ]
+        self.session = self._new_session()
         self.http_lock = Lock()          # serialises actual HTTP calls on the shared session
         self.cache = {}
         self.cache_lock = Lock()
         self.last_successful_request = 0
-        self._initialize_session()
 
     def _new_session(self):
         session = curl_requests.Session(impersonate="chrome")
@@ -92,12 +98,6 @@ class NSEBrowserSimulator:
 
     def _initialize_session(self):
         """Initialize session with browser impersonation and warm up cookies"""
-        self.user_agents = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-        ]
-
         if self.session is None:
             self.session = self._new_session()
 
@@ -167,6 +167,8 @@ class NSEBrowserSimulator:
 
             except (curl_requests.RequestsError, ConnectionResetError) as e:
                 logger.warning("Attempt %d failed: %s", attempt + 1, e)
+                if "Could not resolve host" in str(e):
+                    break
                 if attempt < max_retries - 1:
                     time.sleep((attempt + 1) * 2)  # Exponential backoff
                 continue
@@ -279,27 +281,45 @@ def next_api_historical(symbol, from_date, to_date):
     return sorted(merged.values(), key=lambda e: datetime.strptime(e["mtimestamp"], "%d-%b-%Y"), reverse=True) or None
 
 
+def _quote_section(value):
+    return value if isinstance(value, dict) else {}
+
+
+def _quote_number(value, default=0.0):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number if math.isfinite(number) else default
+
+
 def map_next_quote_to_legacy(q):
     """Map NSE NextApi quote response to the legacy /api/quote-equity schema."""
-    meta = q.get("metaData", {})
-    ob = q.get("orderBook", {})
-    ti = q.get("tradeInfo", {})
-    pi = q.get("priceInfo", {})
-    si = q.get("secInfo", {})
+    q = _quote_section(q)
+    meta = _quote_section(q.get("metaData"))
+    ob = _quote_section(q.get("orderBook"))
+    ti = _quote_section(q.get("tradeInfo"))
+    pi = _quote_section(q.get("priceInfo"))
+    si = _quote_section(q.get("secInfo"))
 
-    last_price = float(ob.get("lastPrice") or 0)
-    prev_close = float(meta.get("previousClose") or meta.get("basePrice") or 0)
-    change = float(meta.get("change") or (last_price - prev_close))
-    p_change = float(meta.get("pChange") or 0)
+    last_price = _quote_number(
+        ob.get("lastPrice") or meta.get("lastPrice") or pi.get("lastPrice")
+    )
+    prev_close = _quote_number(meta.get("previousClose") or meta.get("basePrice"))
+    change = _quote_number(meta.get("change"), last_price - prev_close)
+    p_change = _quote_number(
+        meta.get("pChange"),
+        (change / prev_close * 100) if prev_close else 0,
+    )
 
     band_low = band_high = None
     if pi.get("priceBand"):
         try:
             lo, hi = pi["priceBand"].split("-")
-            band_low, band_high = float(lo), float(hi)
+            band_low, band_high = _quote_number(lo), _quote_number(hi)
         except (ValueError, TypeError):
             pass
-    if band_high is None:
+    if band_high is None and prev_close:
         band_high = round(prev_close * 1.2, 2)
         band_low = round(prev_close * 0.8, 2)
 
@@ -313,22 +333,22 @@ def map_next_quote_to_legacy(q):
             "lastPrice": last_price,
             "change": change,
             "pChange": p_change,
-            "open": float(meta.get("open") or 0),
+            "open": _quote_number(meta.get("open")),
             "previousClose": prev_close,
             "intraDayHighLow": {
-                "max": float(meta.get("dayHigh") or 0),
-                "min": float(meta.get("dayLow") or 0),
+                "max": _quote_number(meta.get("dayHigh")),
+                "min": _quote_number(meta.get("dayLow")),
             },
             "weekHighLow": {
-                "max": float(pi.get("yearHigh") or 0),
-                "min": float(pi.get("yearLow") or 0),
+                "max": _quote_number(pi.get("yearHigh")),
+                "min": _quote_number(pi.get("yearLow")),
             },
             "upperCP": band_high,
             "lowerCP": band_low,
         },
         "metadata": {
             "pdSectorPe": si.get("pdSectorPe"),
-            "pdSectorInd": (si.get("pdSectorInd") or "").strip() or None,
+            "pdSectorInd": str(si.get("pdSectorInd") or "").strip() or None,
         },
         "marketDeptOrderBook": {
             "tradeInfo": {
@@ -516,7 +536,7 @@ def get_live_data():
     )
 
     if not dynamic_data:
-        return jsonify({"error": "Failed to fetch live data"}), 500
+        return jsonify({"error": "NSE did not return live chart data"}), 502
 
     pre_open_data = []
     normal_market_data = []
@@ -560,7 +580,7 @@ def get_indices_data():
     try:
         data = nse_fetcher.fetch_nse_data(config.ALL_INDICES_URL, cache_ttl=config.TTL_INDICES)
         if not data:
-            return jsonify({"error": "Failed to fetch indices data"}), 500
+            return jsonify({"error": "NSE did not return indices data"}), 502
 
         indices = []
         for item in data.get("data", []):
@@ -645,6 +665,8 @@ def get_stock_data():
             return jsonify({"error": "Failed to fetch quote data"}), 500
 
         legacy = map_next_quote_to_legacy(quote_response)
+        if legacy["priceInfo"]["lastPrice"] <= 0:
+            return jsonify({"error": f"Incomplete quote data for {symbol}"}), 502
         try:
             pre_open = get_pre_open_market(symbol)
             if pre_open:
@@ -657,6 +679,40 @@ def get_stock_data():
     except Exception as e:
         logger.exception("Error fetching stock data")
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/get_watchlist_data")
+def get_watchlist_data():
+    """Lightweight per-symbol quotes for the watchlist sidebar.
+
+    Returns only last/change/percent for each requested symbol so the client
+    can refresh every watchlist entry without fetching full stock payloads.
+    """
+    raw = request.args.get("symbols", "").strip()
+    symbols = [s.strip().upper() for s in raw.split(",") if s.strip()]
+    symbols = list(dict.fromkeys(symbols))[:25]
+
+    if not symbols:
+        return jsonify({})
+
+    quotes = {}
+    for symbol in symbols:
+        if not is_valid_symbol(symbol):
+            continue
+        try:
+            legacy = map_next_quote_to_legacy(next_api_quote(symbol))
+            if legacy["priceInfo"]["lastPrice"] <= 0:
+                continue
+            pi = legacy["priceInfo"]
+            quotes[symbol] = {
+                "last": pi["lastPrice"],
+                "change": pi["change"],
+                "percent": pi["pChange"],
+            }
+        except Exception as e:
+            logger.warning("Error fetching watchlist quote for %s: %s", symbol, e)
+
+    return jsonify(quotes)
 
 
 _stocks_cache = None
@@ -790,6 +846,8 @@ def get_peers():
                 if not pq:
                     continue
                 legacy = map_next_quote_to_legacy(pq)
+                if legacy["priceInfo"]["lastPrice"] <= 0:
+                    continue
                 peers.append({
                     "symbol": legacy["info"].get("symbol") or peer,
                     "name": legacy["info"].get("companyName"),

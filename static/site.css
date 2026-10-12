@@ -56,6 +56,7 @@ body {
     align-items: center;
     justify-content: space-between;
     height: 56px;
+    width: 100%;
     gap: 12px;
 }
 
@@ -65,6 +66,7 @@ body {
     align-items: center;
     gap: 12px;
     min-width: 0;
+    flex: 0 1 auto;
 }
 
 .app-navbar .navbar-brand {
@@ -121,8 +123,10 @@ body {
 /* Nav links pushed to the right */
 .app-navbar .nav-pills {
     margin-left: auto;
+    justify-content: flex-end;
+    flex-wrap: nowrap;
     flex-shrink: 0;
-    gap: 2px;
+    gap: 4px;
 }
 
 .app-navbar .nav-link {
@@ -190,70 +194,6 @@ body {
 .section-card .card-body {
     padding: 12px 14px;
 }
-
-/* ---- Indices Ticker ---- */
-#indicesSlider { margin: 0 -4px; }
-
-.indices_details {
-    border-radius: 0 5px 5px 0;
-    padding: 5px 10px;
-    margin: 0 3px 3px;
-    background: #f8fafc;
-    border: none;
-    border-left: 3px solid var(--primary);
-    transition: background .15s, border-color .15s;
-}
-
-.indices_details:hover {
-    background: var(--primary-light);
-    border-left-color: var(--primary-dark);
-}
-
-.indices_details .symbol {
-    margin: 0;
-    font-size: .67rem;
-    font-weight: 700;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: .3px;
-}
-
-.indices_details .value {
-    margin: 1px 0;
-    font-size: .9rem;
-    font-weight: 700;
-    color: var(--text);
-}
-
-.indices_details .chng {
-    margin: 0;
-    font-size: .7rem;
-    font-weight: 600;
-}
-
-.slick-slide { padding: 0 4px; }
-
-.slick-prev, .slick-next {
-    width: 28px;
-    height: 28px;
-    z-index: 1;
-    background: var(--primary) !important;
-    border-radius: 50% !important;
-    box-shadow: var(--shadow-sm);
-}
-
-.slick-prev { left: -10px; }
-.slick-next { right: -10px; }
-
-.slick-prev:before, .slick-next:before {
-    font-family: 'bootstrap-icons';
-    font-size: 14px;
-    color: #fff;
-    opacity: 1;
-}
-
-.slick-prev:before { content: "\F284"; }
-.slick-next:before { content: "\F285"; }
 
 /* ---- Search bar ---- */
 .search-wrapper {
@@ -498,6 +438,105 @@ body {
 .idx-change { font-weight: 700; }
 .idx-up   { color: #4ade80; }
 .idx-down { color: #f87171; }
+
+/* ---- Chart watchlist ---- */
+.chart-workspace {
+    display: grid;
+    grid-template-columns: minmax(190px, 230px) minmax(0, 1fr);
+    align-items: start;
+    gap: 14px;
+}
+
+.chart-main { min-width: 0; }
+
+.watchlist-card {
+    position: sticky;
+    top: 70px;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+}
+
+.watchlist-header {
+    display: grid;
+    gap: 10px;
+}
+
+.watchlist-header h6 {
+    font-size: .9rem;
+    font-weight: 700;
+}
+
+.watchlist-items {
+    display: grid;
+    gap: 6px;
+}
+
+.watchlist-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #f8fafc;
+}
+
+.watchlist-item.active {
+    border-color: var(--primary);
+    background: var(--primary-light);
+}
+
+.watchlist-symbol {
+    padding: 6px 10px;
+    color: var(--text);
+    font-size: .8rem;
+    font-weight: 700;
+    text-decoration: none;
+}
+
+.watchlist-symbol:hover { color: var(--primary-dark); }
+
+.watchlist-values {
+    display: grid;
+    justify-items: end;
+    gap: 1px;
+    margin-left: auto;
+    padding: 4px 8px;
+    white-space: nowrap;
+    font-size: .74rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.watchlist-price { font-weight: 700; }
+.watchlist-change { font-weight: 600; }
+
+.watchlist-remove {
+    align-self: stretch;
+    padding: 0 8px;
+    border: 0;
+    border-left: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-muted);
+    font-size: .7rem;
+}
+
+.watchlist-remove:hover {
+    background: #fee2e2;
+    color: var(--danger);
+}
+
+.watchlist-empty {
+    color: var(--text-muted);
+    font-size: .78rem;
+}
+
+@media (max-width: 767px) {
+    .chart-workspace { grid-template-columns: minmax(0, 1fr); }
+    .watchlist-card { position: static; }
+}
 
 /* ---- Info tables (key-value) ---- */
 .info-table {

@@ -154,6 +154,8 @@ class NseAppTest(unittest.TestCase):
         body = response.get_data(as_text=True)
         self.assertIn("TCS", body)
         self.assertNotIn("{{", body, "Unrendered Jinja markers on symbol page")
+        self.assertIn('id="watchlistAddBtn"', body)
+        self.assertIn('id="watchlistItems"', body)
         self.assertIn("/static/app.js", body)
         self.assertIn("/static/site.css", body)
 
@@ -178,6 +180,56 @@ class NseAppTest(unittest.TestCase):
         response = self.client.get("/get_stock_data?symbol=BAD!SYM")
         self.assertEqual(response.status_code, 400)
         self.assertIn("error", response.get_json())
+
+    def test_quote_mapping_handles_null_api_sections(self):
+        quote = viewer.map_next_quote_to_legacy({
+            "metaData": {
+                "symbol": "TATAMOTORS",
+                "lastPrice": "500",
+                "previousClose": "490",
+            },
+            "orderBook": None,
+            "tradeInfo": None,
+            "priceInfo": None,
+            "secInfo": None,
+        })
+        self.assertEqual(quote["priceInfo"]["lastPrice"], 500)
+        self.assertEqual(quote["priceInfo"]["change"], 10)
+        self.assertAlmostEqual(quote["priceInfo"]["pChange"], 100 * 10 / 490)
+
+    def test_get_stock_data_reports_incomplete_quote_without_crashing(self):
+        with patch.object(viewer, "next_api_quote", return_value={
+            "metaData": {"symbol": "TATAMOTORS"},
+            "orderBook": None,
+        }):
+            response = self.client.get("/get_stock_data?symbol=TATAMOTORS")
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("Incomplete quote data", response.get_json()["error"])
+
+    def test_get_watchlist_data_returns_quotes(self):
+        response = self.client.get("/get_watchlist_data?symbols=TCS,INFY")
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(set(data.keys()), {"TCS", "INFY"})
+        self.assertEqual(data["TCS"]["last"], 105)
+        self.assertEqual(data["TCS"]["change"], 5)
+        self.assertAlmostEqual(data["TCS"]["percent"], 5.0)
+        self.assertIn("max-age=", response.headers.get("Cache-Control", ""))
+
+    def test_get_watchlist_data_empty(self):
+        response = self.client.get("/get_watchlist_data")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {})
+
+    def test_get_watchlist_data_skips_invalid_symbols(self):
+        response = self.client.get("/get_watchlist_data?symbols=TCS,BAD!SYM")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(set(response.get_json().keys()), {"TCS"})
+
+    def test_get_watchlist_data_dedupes_symbols(self):
+        response = self.client.get("/get_watchlist_data?symbols=TCS,tcs,TCS")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(set(response.get_json().keys()), {"TCS"})
 
     def test_get_historical_ok(self):
         response = self.client.get(
